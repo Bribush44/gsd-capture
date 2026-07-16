@@ -681,3 +681,16 @@ document.addEventListener("DOMContentLoaded", function () {
     });
   }
 });
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", function () {
+    navigator.serviceWorker
+      .register("/sw.js")
+      .then(function () {
+        console.log("GSD Capture service worker registered.");
+      })
+      .catch(function (error) {
+        console.error("Service worker registration failed:", error);
+      });
+  });
+}
