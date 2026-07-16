@@ -19,7 +19,7 @@
 
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=4" />
+  <link rel="stylesheet" href="styles.css?v=5" />
 </head>
 
 <body>
@@ -201,6 +201,26 @@
               Sign in to connect GSD Capture to your Microsoft account.
             </p>
 
+            <div id="microsoftListPanel" class="microsoft-list-panel hidden">
+              <label for="microsoftListSelect">Destination To Do list</label>
+
+              <select id="microsoftListSelect" disabled>
+                <option value="">Load your Microsoft To Do lists</option>
+              </select>
+
+              <button
+                id="loadMicrosoftListsButton"
+                class="secondary-button"
+                type="button"
+              >
+                Load To Do Lists
+              </button>
+
+              <p id="microsoftListMessage" class="microsoft-list-message" aria-live="polite">
+                No Microsoft To Do lists loaded yet.
+              </p>
+            </div>
+
             <div class="microsoft-actions">
               <button
                 id="connectMicrosoftButton"
@@ -279,6 +299,6 @@
   </div>
 
   <script src="vendor/msal-browser.min.js?v=1"></script>
-  <script src="app.js?v=4"></script>
+  <script src="app.js?v=5"></script>
 </body>
 </html>

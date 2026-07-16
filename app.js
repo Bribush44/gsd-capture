@@ -57,6 +57,18 @@ document.addEventListener("DOMContentLoaded", async function () {
   const microsoftConnectionBadge = document.getElementById(
     "microsoftConnectionBadge"
   );
+  const microsoftListPanel = document.getElementById(
+    "microsoftListPanel"
+  );
+  const microsoftListSelect = document.getElementById(
+    "microsoftListSelect"
+  );
+  const loadMicrosoftListsButton = document.getElementById(
+    "loadMicrosoftListsButton"
+  );
+  const microsoftListMessage = document.getElementById(
+    "microsoftListMessage"
+  );
 
   const voiceButton = document.getElementById("voiceButton");
   const captureButton = captureForm
@@ -72,6 +84,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   let microsoftAuth = null;
   let microsoftAccount = null;
   let microsoftAuthReady = false;
+  let microsoftTodoLists = [];
 
   if (
     !captureForm ||
@@ -135,6 +148,20 @@ document.addEventListener("DOMContentLoaded", async function () {
       disconnectMicrosoftButton.addEventListener(
         "click",
         disconnectMicrosoftAccount
+      );
+    }
+
+    if (loadMicrosoftListsButton) {
+      loadMicrosoftListsButton.addEventListener(
+        "click",
+        loadMicrosoftTodoLists
+      );
+    }
+
+    if (microsoftListSelect) {
+      microsoftListSelect.addEventListener(
+        "change",
+        saveMicrosoftListSelection
       );
     }
   }
@@ -309,6 +336,20 @@ document.addEventListener("DOMContentLoaded", async function () {
         );
       }
 
+      if (microsoftListPanel) {
+        microsoftListPanel.classList.remove("hidden");
+      }
+
+      if (settings.microsoftListName) {
+        setMicrosoftListMessage(
+          "Saved destination: " + settings.microsoftListName + ". Load your lists to verify it."
+        );
+      } else {
+        setMicrosoftListMessage(
+          "Load your Microsoft To Do lists, then choose the destination list."
+        );
+      }
+
       setMicrosoftMessage(
         "Connected as " + displayName + "."
       );
@@ -334,8 +375,251 @@ document.addEventListener("DOMContentLoaded", async function () {
       disconnectMicrosoftButton.classList.add("hidden");
     }
 
+    if (microsoftListPanel) {
+      microsoftListPanel.classList.add("hidden");
+    }
+
+    clearMicrosoftListOptions();
+
     setMicrosoftMessage(
       "Sign in to connect GSD Capture to your Microsoft account."
+    );
+  }
+
+  async function loadMicrosoftTodoLists() {
+    if (!navigator.onLine) {
+      setMicrosoftListMessage(
+        "Connect to the internet before loading Microsoft To Do lists.",
+        true
+      );
+      return;
+    }
+
+    if (!microsoftAuthReady || !microsoftAuth || !microsoftAccount) {
+      setMicrosoftListMessage(
+        "Connect your Microsoft account first.",
+        true
+      );
+      return;
+    }
+
+    setMicrosoftListButtonBusy(true);
+    setMicrosoftListMessage(
+      "Loading your Microsoft To Do lists..."
+    );
+
+    try {
+      const accessToken = await acquireMicrosoftAccessToken();
+
+      if (!accessToken) {
+        return;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(function () {
+        controller.abort();
+      }, 15000);
+
+      let response;
+
+      try {
+        response = await fetch(
+          "https://graph.microsoft.com/v1.0/me/todo/lists",
+          {
+            headers: {
+              Authorization: "Bearer " + accessToken,
+              Accept: "application/json",
+            },
+            signal: controller.signal,
+          }
+        );
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+
+      if (!response.ok) {
+        throw new Error(
+          "Microsoft Graph returned " + response.status + "."
+        );
+      }
+
+      const data = await response.json();
+      microsoftTodoLists = Array.isArray(data.value)
+        ? data.value.slice()
+        : [];
+
+      microsoftTodoLists.sort(function (first, second) {
+        return String(first.displayName || "").localeCompare(
+          String(second.displayName || "")
+        );
+      });
+
+      populateMicrosoftListOptions();
+    } catch (error) {
+      console.error("Loading Microsoft To Do lists failed:", error);
+
+      const message =
+        error && error.name === "AbortError"
+          ? "Microsoft To Do took too long to respond. Please try again."
+          : "Your Microsoft To Do lists could not be loaded. Please try again.";
+
+      setMicrosoftListMessage(message, true);
+    } finally {
+      setMicrosoftListButtonBusy(false);
+    }
+  }
+
+  async function acquireMicrosoftAccessToken() {
+    const account =
+      microsoftAccount || microsoftAuth.getActiveAccount();
+
+    if (!account) {
+      throw new Error("No Microsoft account is connected.");
+    }
+
+    try {
+      const tokenResult = await microsoftAuth.acquireTokenSilent({
+        account: account,
+        scopes: MICROSOFT_SCOPES,
+      });
+
+      return tokenResult.accessToken;
+    } catch (error) {
+      const interactionRequired =
+        window.msal.InteractionRequiredAuthError &&
+        error instanceof window.msal.InteractionRequiredAuthError;
+
+      if (!interactionRequired) {
+        throw error;
+      }
+
+      setMicrosoftListMessage(
+        "Microsoft needs you to approve access again. Opening sign-in..."
+      );
+
+      await microsoftAuth.acquireTokenRedirect({
+        account: account,
+        scopes: MICROSOFT_SCOPES,
+      });
+
+      return null;
+    }
+  }
+
+  function populateMicrosoftListOptions() {
+    if (!microsoftListSelect) {
+      return;
+    }
+
+    microsoftListSelect.innerHTML = "";
+
+    if (microsoftTodoLists.length === 0) {
+      const emptyOption = document.createElement("option");
+      emptyOption.value = "";
+      emptyOption.textContent = "No Microsoft To Do lists found";
+      microsoftListSelect.appendChild(emptyOption);
+      microsoftListSelect.disabled = true;
+      setMicrosoftListMessage(
+        "Microsoft returned no To Do lists for this account.",
+        true
+      );
+      return;
+    }
+
+    microsoftTodoLists.forEach(function (list) {
+      const option = document.createElement("option");
+      option.value = list.id;
+      option.textContent = list.displayName || "Unnamed list";
+      microsoftListSelect.appendChild(option);
+    });
+
+    const savedList = microsoftTodoLists.find(function (list) {
+      return list.id === settings.microsoftListId;
+    });
+    const defaultList = microsoftTodoLists.find(function (list) {
+      return list.wellknownListName === "defaultList";
+    });
+    const selectedList =
+      savedList || defaultList || microsoftTodoLists[0];
+
+    microsoftListSelect.value = selectedList.id;
+    microsoftListSelect.disabled = false;
+    saveMicrosoftListSelection();
+
+    setMicrosoftListMessage(
+      "Loaded " +
+        microsoftTodoLists.length +
+        " To Do " +
+        (microsoftTodoLists.length === 1 ? "list" : "lists") +
+        ". Destination: " +
+        (selectedList.displayName || "Unnamed list") +
+        "."
+    );
+  }
+
+  function saveMicrosoftListSelection() {
+    if (!microsoftListSelect || !microsoftListSelect.value) {
+      return;
+    }
+
+    const selectedList = microsoftTodoLists.find(function (list) {
+      return list.id === microsoftListSelect.value;
+    });
+
+    if (!selectedList) {
+      return;
+    }
+
+    settings.microsoftListId = selectedList.id;
+    settings.microsoftListName =
+      selectedList.displayName || "Unnamed list";
+
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify(settings)
+    );
+
+    setMicrosoftListMessage(
+      "Destination list saved: " +
+        settings.microsoftListName +
+        "."
+    );
+  }
+
+  function clearMicrosoftListOptions() {
+    microsoftTodoLists = [];
+
+    if (microsoftListSelect) {
+      microsoftListSelect.innerHTML =
+        '<option value="">Load your Microsoft To Do lists</option>';
+      microsoftListSelect.disabled = true;
+    }
+
+    setMicrosoftListMessage(
+      "No Microsoft To Do lists loaded yet."
+    );
+  }
+
+  function setMicrosoftListButtonBusy(isBusy) {
+    if (!loadMicrosoftListsButton) {
+      return;
+    }
+
+    loadMicrosoftListsButton.disabled = isBusy;
+    loadMicrosoftListsButton.textContent = isBusy
+      ? "Loading Lists..."
+      : "Load To Do Lists";
+  }
+
+  function setMicrosoftListMessage(message, isError) {
+    if (!microsoftListMessage) {
+      return;
+    }
+
+    microsoftListMessage.textContent = message;
+    microsoftListMessage.classList.toggle(
+      "error-message",
+      Boolean(isError)
     );
   }
 
@@ -1001,6 +1285,8 @@ document.addEventListener("DOMContentLoaded", async function () {
       calendarSuggestions: calendarToggle
         ? calendarToggle.checked
         : true,
+      microsoftListId: settings.microsoftListId || "",
+      microsoftListName: settings.microsoftListName || "",
     };
 
     localStorage.setItem(
@@ -1111,6 +1397,8 @@ document.addEventListener("DOMContentLoaded", async function () {
           defaultList: "General",
           aiSorting: true,
           calendarSuggestions: true,
+          microsoftListId: "",
+          microsoftListName: "",
         };
       }
 
@@ -1121,6 +1409,8 @@ document.addEventListener("DOMContentLoaded", async function () {
         defaultList: "General",
         aiSorting: true,
         calendarSuggestions: true,
+        microsoftListId: "",
+        microsoftListName: "",
       };
     }
   }

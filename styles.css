@@ -40,7 +40,8 @@ body {
 
 button,
 input,
-textarea {
+textarea,
+select {
   font: inherit;
 }
 
@@ -156,7 +157,8 @@ button {
 }
 
 textarea,
-input[type="text"] {
+input[type="text"],
+select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: var(--radius-medium);
@@ -172,14 +174,16 @@ textarea {
   line-height: 1.5;
 }
 
-input[type="text"] {
+input[type="text"],
+select {
   height: 50px;
   margin-bottom: 18px;
   padding: 0 14px;
 }
 
 textarea:focus,
-input[type="text"]:focus {
+input[type="text"]:focus,
+select:focus {
   border-color: var(--primary);
   box-shadow: 0 0 0 4px rgba(54, 89, 227, 0.12);
 }
@@ -539,3 +543,46 @@ input[type="text"]:focus {
 .hidden {
   display: none !important;
 }
+
+.microsoft-list-panel {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+}
+
+.microsoft-list-panel label {
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.microsoft-list-panel select {
+  width: 100%;
+  margin: 0;
+  background: #fbfcfe;
+}
+
+.microsoft-list-panel select:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+.microsoft-list-panel .secondary-button {
+  width: 100%;
+}
+
+.microsoft-list-message {
+  min-height: 20px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.microsoft-list-message.error-message {
+  color: var(--danger);
+}
+
