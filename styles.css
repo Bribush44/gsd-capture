@@ -1,0 +1,481 @@
+:root {
+  --background: #f4f6fb;
+  --surface: #ffffff;
+  --surface-secondary: #eef2f8;
+  --text: #172033;
+  --text-muted: #667085;
+  --primary: #3659e3;
+  --primary-dark: #2945b8;
+  --border: #dce2ec;
+  --success: #137a52;
+  --danger: #c73535;
+  --shadow: 0 12px 30px rgba(23, 32, 51, 0.08);
+  --radius-large: 24px;
+  --radius-medium: 16px;
+  --radius-small: 12px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--background);
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--background);
+  color: var(--text);
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.app-shell {
+  width: 100%;
+  min-height: 100vh;
+  padding-bottom: 96px;
+}
+
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding:
+    calc(18px + env(safe-area-inset-top))
+    20px
+    16px;
+  background: rgba(244, 246, 251, 0.94);
+  border-bottom: 1px solid rgba(220, 226, 236, 0.8);
+  backdrop-filter: blur(18px);
+}
+
+.app-header h1 {
+  margin: 2px 0 0;
+  font-size: 1.45rem;
+  line-height: 1.2;
+}
+
+.eyebrow,
+.section-label,
+.welcome-label {
+  margin: 0;
+  color: var(--primary);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.icon-button {
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  background: var(--surface);
+  font-size: 1.2rem;
+  box-shadow: 0 4px 14px rgba(23, 32, 51, 0.06);
+}
+
+.app-main {
+  width: min(100%, 760px);
+  margin: 0 auto;
+  padding: 18px;
+}
+
+.screen {
+  display: none;
+}
+
+.active-screen {
+  display: block;
+}
+
+.welcome-card {
+  padding: 24px;
+  border-radius: var(--radius-large);
+  background:
+    linear-gradient(
+      145deg,
+      rgba(54, 89, 227, 0.98),
+      rgba(39, 63, 167, 0.98)
+    );
+  color: white;
+  box-shadow: var(--shadow);
+}
+
+.welcome-card h2 {
+  margin: 8px 0 8px;
+  font-size: 1.7rem;
+}
+
+.welcome-card p:last-child {
+  margin: 0;
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.welcome-label {
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.capture-card,
+.settings-card {
+  margin-top: 18px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-large);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.capture-card label,
+.settings-card > label:not(.toggle-row) {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+textarea,
+input[type="text"] {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-medium);
+  background: #fbfcfe;
+  color: var(--text);
+  outline: none;
+}
+
+textarea {
+  min-height: 140px;
+  padding: 16px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+input[type="text"] {
+  height: 50px;
+  margin-bottom: 18px;
+  padding: 0 14px;
+}
+
+textarea:focus,
+input[type="text"]:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 4px rgba(54, 89, 227, 0.12);
+}
+
+.capture-actions {
+  display: grid;
+  grid-template-columns: 1fr 1.35fr;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.primary-button,
+.secondary-button {
+  min-height: 50px;
+  border-radius: var(--radius-medium);
+  font-weight: 800;
+}
+
+.primary-button {
+  border: 0;
+  background: var(--primary);
+  color: white;
+}
+
+.primary-button:active {
+  background: var(--primary-dark);
+  transform: translateY(1px);
+}
+
+.secondary-button {
+  border: 1px solid var(--border);
+  background: var(--surface-secondary);
+  color: var(--text);
+}
+
+.status-message {
+  min-height: 22px;
+  margin: 12px 0 0;
+  color: var(--success);
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.recent-section {
+  margin-top: 26px;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.section-heading h2 {
+  margin: 4px 0 0;
+  font-size: 1.35rem;
+}
+
+.page-heading {
+  margin-top: 6px;
+}
+
+.count-badge {
+  display: inline-flex;
+  min-width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface-secondary);
+  color: var(--primary);
+  font-weight: 800;
+}
+
+.task-list {
+  display: grid;
+  gap: 12px;
+}
+
+.task-card {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-medium);
+  background: var(--surface);
+  box-shadow: 0 8px 22px rgba(23, 32, 51, 0.05);
+}
+
+.task-card h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.task-card p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.task-tag {
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: var(--surface-secondary);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+.empty-state {
+  padding: 34px 18px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-large);
+  background: rgba(255, 255, 255, 0.65);
+  text-align: center;
+}
+
+.empty-icon {
+  display: inline-flex;
+  width: 48px;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 10px;
+  border-radius: 50%;
+  background: var(--surface-secondary);
+  font-size: 1.3rem;
+}
+
+.empty-state h3 {
+  margin: 0 0 6px;
+}
+
+.empty-state p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.review-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.summary-item {
+  padding: 16px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-medium);
+  background: var(--surface);
+  text-align: center;
+}
+
+.summary-item strong {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 1.35rem;
+}
+
+.summary-item span {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+}
+
+.settings-card {
+  display: grid;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 0;
+  border-top: 1px solid var(--border);
+}
+
+.toggle-row span {
+  display: grid;
+  gap: 4px;
+}
+
+.toggle-row small {
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+
+.toggle-row input {
+  width: 24px;
+  height: 24px;
+  accent-color: var(--primary);
+}
+
+.settings-card .primary-button {
+  margin-top: 18px;
+}
+
+.bottom-navigation {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 30;
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding:
+    10px
+    12px
+    calc(10px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(18px);
+}
+
+.nav-button {
+  display: grid;
+  gap: 3px;
+  place-items: center;
+  min-height: 58px;
+  border: 0;
+  border-radius: 16px;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.nav-button span {
+  font-size: 1.25rem;
+}
+
+.nav-button small {
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.active-nav {
+  background: rgba(54, 89, 227, 0.1);
+  color: var(--primary);
+}
+
+@media (min-width: 700px) {
+  .app-main {
+    padding-top: 28px;
+  }
+
+  .welcome-card {
+    padding: 32px;
+  }
+
+  .capture-card,
+  .settings-card {
+    padding: 26px;
+  }
+}
+.task-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.small-action-button {
+  min-height: 38px;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-secondary);
+  color: var(--text);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.small-action-button:active {
+  transform: translateY(1px);
+}
+
+.complete-button {
+  border-color: rgba(19, 122, 82, 0.25);
+  background: rgba(19, 122, 82, 0.1);
+  color: var(--success);
+}
+
+.delete-button {
+  border-color: rgba(199, 53, 53, 0.2);
+  background: rgba(199, 53, 53, 0.08);
+  color: var(--danger);
+}
+
+.secondary-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}

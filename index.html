@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1, viewport-fit=cover"
+  />
+
+  <meta
+    name="description"
+    content="A fast, phone-first GTD task capture and organization app."
+  />
+
+  <meta name="theme-color" content="#172033" />
+
+  <title>GSD Capture</title>
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+  <div class="app-shell">
+    <header class="app-header">
+      <div>
+        <p class="eyebrow">GTD ASSISTANT</p>
+        <h1>GSD Capture</h1>
+      </div>
+
+      <button
+        id="settingsButton"
+        class="icon-button"
+        type="button"
+        aria-label="Open settings"
+      >
+        ⚙️
+      </button>
+    </header>
+
+    <main class="app-main">
+      <!-- Capture Screen -->
+      <section id="captureScreen" class="screen active-screen">
+        <div class="welcome-card">
+          <p class="welcome-label">QUICK CAPTURE</p>
+          <h2>What is on your mind?</h2>
+          <p>
+            Capture it now. Organize it later.
+          </p>
+        </div>
+
+        <form id="captureForm" class="capture-card">
+          <label for="taskInput">Task, idea, reminder, or note</label>
+
+          <textarea
+            id="taskInput"
+            name="taskInput"
+            rows="5"
+            maxlength="1000"
+            placeholder="Example: Tomorrow morning call the supplier about the packaging quote..."
+            required
+          ></textarea>
+
+          <div class="capture-actions">
+            <button
+              id="voiceButton"
+              class="secondary-button"
+              type="button"
+            >
+              🎙️ Speak
+            </button>
+
+            <button
+              id="captureButton"
+              class="primary-button"
+              type="submit"
+            >
+              Capture
+            </button>
+          </div>
+
+          <p id="captureMessage" class="status-message" aria-live="polite"></p>
+        </form>
+
+        <section class="recent-section">
+          <div class="section-heading">
+            <div>
+              <p class="section-label">INBOX</p>
+              <h2>Recent captures</h2>
+            </div>
+
+            <span id="inboxCount" class="count-badge">0</span>
+          </div>
+
+          <div id="recentTaskList" class="task-list">
+            <div class="empty-state">
+              <span class="empty-icon">✓</span>
+              <h3>Your inbox is clear</h3>
+              <p>New tasks and ideas will appear here.</p>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <!-- Today Screen -->
+      <section id="todayScreen" class="screen">
+        <div class="section-heading page-heading">
+          <div>
+            <p class="section-label">FOCUS</p>
+            <h2>Today</h2>
+          </div>
+        </div>
+
+        <div id="todayTaskList" class="task-list">
+          <div class="empty-state">
+            <span class="empty-icon">☀️</span>
+            <h3>No tasks planned yet</h3>
+            <p>Your priority tasks will appear here.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Review Screen -->
+      <section id="reviewScreen" class="screen">
+        <div class="section-heading page-heading">
+          <div>
+            <p class="section-label">CLARIFY & ORGANIZE</p>
+            <h2>Review</h2>
+          </div>
+
+          <span id="reviewCount" class="count-badge">0</span>
+        </div>
+
+        <div class="review-summary">
+          <div class="summary-item">
+            <strong id="capturedTotal">0</strong>
+            <span>Captured</span>
+          </div>
+
+          <div class="summary-item">
+            <strong id="completedTotal">0</strong>
+            <span>Completed</span>
+          </div>
+
+          <div class="summary-item">
+            <strong id="needsReviewTotal">0</strong>
+            <span>Needs review</span>
+          </div>
+        </div>
+
+        <div id="reviewTaskList" class="task-list">
+          <div class="empty-state">
+            <span class="empty-icon">🧠</span>
+            <h3>Nothing needs review</h3>
+            <p>Captured items that need sorting will appear here.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings Screen -->
+      <section id="settingsScreen" class="screen">
+        <div class="section-heading page-heading">
+          <div>
+            <p class="section-label">PERSONALIZE</p>
+            <h2>Settings</h2>
+          </div>
+        </div>
+
+        <div class="settings-card">
+          <label for="userName">Your name</label>
+          <input
+            id="userName"
+            type="text"
+            autocomplete="name"
+            placeholder="Enter your name"
+          />
+
+          <label for="defaultList">Default inbox name</label>
+          <input
+            id="defaultList"
+            type="text"
+            value="General"
+            placeholder="General"
+          />
+
+          <label class="toggle-row">
+            <span>
+              <strong>AI sorting</strong>
+              <small>Automatically analyze captured items</small>
+            </span>
+
+            <input id="aiSortingToggle" type="checkbox" checked />
+          </label>
+
+          <label class="toggle-row">
+            <span>
+              <strong>Calendar suggestions</strong>
+              <small>Recommend time blocks for important tasks</small>
+            </span>
+
+            <input id="calendarToggle" type="checkbox" checked />
+          </label>
+
+          <button id="saveSettingsButton" class="primary-button" type="button">
+            Save Settings
+          </button>
+
+          <p id="settingsMessage" class="status-message" aria-live="polite"></p>
+        </div>
+      </section>
+    </main>
+
+    <nav class="bottom-navigation" aria-label="Main navigation">
+      <button
+        class="nav-button active-nav"
+        type="button"
+        data-screen="captureScreen"
+      >
+        <span>＋</span>
+        <small>Capture</small>
+      </button>
+
+      <button
+        class="nav-button"
+        type="button"
+        data-screen="todayScreen"
+      >
+        <span>☀️</span>
+        <small>Today</small>
+      </button>
+
+      <button
+        class="nav-button"
+        type="button"
+        data-screen="reviewScreen"
+      >
+        <span>✓</span>
+        <small>Review</small>
+      </button>
+    </nav>
+  </div>
+
+ <script src="app.js?v=3"></script>
+</html>

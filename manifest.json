@@ -1,0 +1,9 @@
+{
+  "name": "GSD Capture",
+  "short_name": "GSD Capture",
+  "description": "Fast voice-powered task capture for Microsoft To Do.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#eef2f7",
+  "theme_color": "#111827"
+}
