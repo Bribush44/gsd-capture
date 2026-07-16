@@ -1,8 +1,17 @@
 "use strict";
 
-document.addEventListener("DOMContentLoaded", function () {
+document.addEventListener("DOMContentLoaded", async function () {
   const TASKS_KEY = "gsdCaptureTasks";
   const SETTINGS_KEY = "gsdCaptureSettings";
+
+  const MICROSOFT_CLIENT_ID =
+    "ab018161-147f-41ab-8859-657a46519c37";
+  const MICROSOFT_AUTHORITY =
+    "https://login.microsoftonline.com/common";
+  const MICROSOFT_SCOPES = [
+    "User.Read",
+    "Tasks.ReadWrite",
+  ];
 
   const captureForm = document.getElementById("captureForm");
   const taskInput = document.getElementById("taskInput");
@@ -36,6 +45,19 @@ document.addEventListener("DOMContentLoaded", function () {
     "settingsMessage"
   );
 
+  const connectMicrosoftButton = document.getElementById(
+    "connectMicrosoftButton"
+  );
+  const disconnectMicrosoftButton = document.getElementById(
+    "disconnectMicrosoftButton"
+  );
+  const microsoftStatus = document.getElementById(
+    "microsoftStatus"
+  );
+  const microsoftConnectionBadge = document.getElementById(
+    "microsoftConnectionBadge"
+  );
+
   const voiceButton = document.getElementById("voiceButton");
   const captureButton = captureForm
     ? captureForm.querySelector('button[type="submit"]')
@@ -47,6 +69,9 @@ document.addEventListener("DOMContentLoaded", function () {
   let tasks = loadTasks();
   let settings = loadSettings();
   let captureInProgress = false;
+  let microsoftAuth = null;
+  let microsoftAccount = null;
+  let microsoftAuthReady = false;
 
   if (
     !captureForm ||
@@ -64,6 +89,7 @@ document.addEventListener("DOMContentLoaded", function () {
   populateSettings();
   registerEvents();
   renderEverything();
+  await initializeMicrosoftSignIn();
 
   function registerEvents() {
     captureForm.addEventListener("submit", captureTask);
@@ -97,6 +123,232 @@ document.addEventListener("DOMContentLoaded", function () {
         startVoiceCapture
       );
     }
+
+    if (connectMicrosoftButton) {
+      connectMicrosoftButton.addEventListener(
+        "click",
+        connectMicrosoftAccount
+      );
+    }
+
+    if (disconnectMicrosoftButton) {
+      disconnectMicrosoftButton.addEventListener(
+        "click",
+        disconnectMicrosoftAccount
+      );
+    }
+  }
+
+  async function initializeMicrosoftSignIn() {
+    if (!window.msal || !window.msal.PublicClientApplication) {
+      setMicrosoftMessage(
+        "Microsoft sign-in could not load. The rest of GSD Capture will still work.",
+        true
+      );
+      return;
+    }
+
+    try {
+      const redirectUri = window.location.origin + "/";
+
+      microsoftAuth = new window.msal.PublicClientApplication({
+        auth: {
+          clientId: MICROSOFT_CLIENT_ID,
+          authority: MICROSOFT_AUTHORITY,
+          redirectUri: redirectUri,
+          postLogoutRedirectUri: redirectUri,
+          navigateToLoginRequestUrl: false,
+        },
+        cache: {
+          cacheLocation: "localStorage",
+        },
+      });
+
+      await microsoftAuth.initialize();
+
+      const redirectResult =
+        await microsoftAuth.handleRedirectPromise();
+
+      if (redirectResult && redirectResult.account) {
+        microsoftAuth.setActiveAccount(
+          redirectResult.account
+        );
+        microsoftAccount = redirectResult.account;
+      } else {
+        microsoftAccount =
+          microsoftAuth.getActiveAccount();
+
+        if (!microsoftAccount) {
+          const accounts = microsoftAuth.getAllAccounts();
+
+          if (accounts.length > 0) {
+            microsoftAccount = accounts[0];
+            microsoftAuth.setActiveAccount(
+              microsoftAccount
+            );
+          }
+        }
+      }
+
+      microsoftAuthReady = true;
+      updateMicrosoftConnectionDisplay();
+
+      if (redirectResult && redirectResult.account) {
+        showScreen("settingsScreen");
+
+        navButtons.forEach(function (button) {
+          button.classList.remove("active-nav");
+        });
+      }
+    } catch (error) {
+      console.error(
+        "Microsoft sign-in initialization failed:",
+        error
+      );
+
+      setMicrosoftMessage(
+        "Microsoft sign-in did not initialize. GSD Capture is still available for local capture.",
+        true
+      );
+    }
+  }
+
+  async function connectMicrosoftAccount() {
+    if (!microsoftAuthReady || !microsoftAuth) {
+      setMicrosoftMessage(
+        "Microsoft sign-in is still loading. Try again in a moment.",
+        true
+      );
+      return;
+    }
+
+    if (connectMicrosoftButton) {
+      connectMicrosoftButton.disabled = true;
+      connectMicrosoftButton.textContent =
+        "Opening Microsoft...";
+    }
+
+    setMicrosoftMessage(
+      "Opening Microsoft sign-in..."
+    );
+
+    try {
+      await microsoftAuth.loginRedirect({
+        scopes: MICROSOFT_SCOPES,
+        prompt: "select_account",
+      });
+    } catch (error) {
+      console.error("Microsoft sign-in failed:", error);
+
+      setMicrosoftMessage(
+        "Microsoft sign-in could not start. Please try again.",
+        true
+      );
+
+      updateMicrosoftConnectionDisplay();
+    }
+  }
+
+  async function disconnectMicrosoftAccount() {
+    if (!microsoftAuthReady || !microsoftAuth) {
+      return;
+    }
+
+    const account =
+      microsoftAccount || microsoftAuth.getActiveAccount();
+
+    setMicrosoftMessage(
+      "Disconnecting Microsoft account..."
+    );
+
+    try {
+      await microsoftAuth.logoutRedirect({
+        account: account || undefined,
+        postLogoutRedirectUri:
+          window.location.origin + "/",
+      });
+    } catch (error) {
+      console.error("Microsoft sign-out failed:", error);
+
+      setMicrosoftMessage(
+        "Microsoft sign-out did not complete. Please try again.",
+        true
+      );
+    }
+  }
+
+  function updateMicrosoftConnectionDisplay() {
+    if (!microsoftAuthReady) {
+      return;
+    }
+
+    if (microsoftAccount) {
+      const displayName =
+        microsoftAccount.name ||
+        microsoftAccount.username ||
+        "Microsoft user";
+
+      if (microsoftConnectionBadge) {
+        microsoftConnectionBadge.textContent =
+          "Connected";
+        microsoftConnectionBadge.classList.add(
+          "connected"
+        );
+      }
+
+      if (connectMicrosoftButton) {
+        connectMicrosoftButton.classList.add("hidden");
+        connectMicrosoftButton.disabled = false;
+        connectMicrosoftButton.textContent =
+          "Connect Microsoft To Do";
+      }
+
+      if (disconnectMicrosoftButton) {
+        disconnectMicrosoftButton.classList.remove(
+          "hidden"
+        );
+      }
+
+      setMicrosoftMessage(
+        "Connected as " + displayName + "."
+      );
+      return;
+    }
+
+    if (microsoftConnectionBadge) {
+      microsoftConnectionBadge.textContent =
+        "Not connected";
+      microsoftConnectionBadge.classList.remove(
+        "connected"
+      );
+    }
+
+    if (connectMicrosoftButton) {
+      connectMicrosoftButton.classList.remove("hidden");
+      connectMicrosoftButton.disabled = false;
+      connectMicrosoftButton.textContent =
+        "Connect Microsoft To Do";
+    }
+
+    if (disconnectMicrosoftButton) {
+      disconnectMicrosoftButton.classList.add("hidden");
+    }
+
+    setMicrosoftMessage(
+      "Sign in to connect GSD Capture to your Microsoft account."
+    );
+  }
+
+  function setMicrosoftMessage(message, isError) {
+    if (!microsoftStatus) {
+      return;
+    }
+
+    microsoftStatus.textContent = message;
+    microsoftStatus.classList.toggle(
+      "error-message",
+      Boolean(isError)
+    );
   }
 
   async function captureTask(event) {

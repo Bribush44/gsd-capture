@@ -1,13 +1,14 @@
 "use strict";
 
-const CACHE_NAME = "gsd-capture-v3";
+const CACHE_NAME = "gsd-capture-v4";
 
 const APP_SHELL = [
   "/",
   "/index.html",
   "/styles.css",
   "/app.js",
-  "/manifest.json"
+  "/manifest.json",
+  "/vendor/msal-browser.min.js"
 ];
 
 self.addEventListener("install", function (event) {
