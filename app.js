@@ -37,11 +37,16 @@ document.addEventListener("DOMContentLoaded", function () {
   );
 
   const voiceButton = document.getElementById("voiceButton");
+  const captureButton = captureForm
+    ? captureForm.querySelector('button[type="submit"]')
+    : null;
+
   const screens = document.querySelectorAll(".screen");
   const navButtons = document.querySelectorAll(".nav-button");
 
   let tasks = loadTasks();
   let settings = loadSettings();
+  let captureInProgress = false;
 
   if (
     !captureForm ||
@@ -94,52 +99,96 @@ document.addEventListener("DOMContentLoaded", function () {
     }
   }
 
-  function captureTask(event) {
+  async function captureTask(event) {
     event.preventDefault();
 
-    try {
-      const text = taskInput.value.trim();
+    if (captureInProgress) {
+      return;
+    }
 
-      if (!text) {
+    const text = taskInput.value.trim();
+
+    if (!text) {
+      showCaptureMessage(
+        "Enter a task or idea first.",
+        true
+      );
+      return;
+    }
+
+    captureInProgress = true;
+    setCaptureButtonBusy(true);
+
+    try {
+      let analysis = null;
+      let usedAi = false;
+
+      if (settings.aiSorting !== false && navigator.onLine) {
         showCaptureMessage(
-          "Enter a task or idea first.",
-          true
+          "Capturing and sorting with AI..."
         );
-        return;
+
+        try {
+          analysis = await classifyTaskWithAi(text);
+          usedAi = true;
+        } catch (aiError) {
+          console.error("AI sorting failed:", aiError);
+        }
       }
 
-      const analysis = analyzeTask(text);
+      if (!analysis) {
+        analysis = analyzeTask(text);
+      }
 
       const newTask = {
         id:
           Date.now().toString() +
           "-" +
           Math.random().toString(16).slice(2),
-        title: text,
+        title:
+          analysis.summary &&
+          analysis.summary.trim()
+            ? analysis.summary.trim()
+            : text,
         originalText: text,
-        category: analysis.category,
-        priority: analysis.priority,
-        dueDate: analysis.dueDate,
-        needsReview: true,
+        category: analysis.category || "General",
+        priority: analysis.priority || "Normal",
+        dueDate: analysis.dueDate || "",
+        context: analysis.context || "",
+        project: analysis.project || "",
+        estimatedMinutes:
+          typeof analysis.estimatedMinutes === "number"
+            ? analysis.estimatedMinutes
+            : null,
+        needsReview:
+          typeof analysis.needsReview === "boolean"
+            ? analysis.needsReview
+            : true,
+        sortingMethod: usedAi ? "ai" : "local",
         plannedForToday: false,
         completed: false,
         createdAt: new Date().toISOString(),
       };
 
       tasks.unshift(newTask);
-
-      localStorage.setItem(
-        TASKS_KEY,
-        JSON.stringify(tasks)
-      );
+      saveTasks();
 
       taskInput.value = "";
-
       renderEverything();
 
-      showCaptureMessage(
-        "Captured successfully. The task is now in your inbox."
-      );
+      if (usedAi) {
+        showCaptureMessage(
+          newTask.needsReview
+            ? "Captured and sorted with AI. This item needs review."
+            : "Captured and sorted with AI."
+        );
+      } else {
+        showCaptureMessage(
+          navigator.onLine
+            ? "Captured successfully using local sorting."
+            : "Captured offline using local sorting."
+        );
+      }
     } catch (error) {
       console.error(error);
 
@@ -147,7 +196,136 @@ document.addEventListener("DOMContentLoaded", function () {
         "Capture error: " + error.message,
         true
       );
+    } finally {
+      captureInProgress = false;
+      setCaptureButtonBusy(false);
     }
+  }
+
+  async function classifyTaskWithAi(text) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(function () {
+      controller.abort();
+    }, 15000);
+
+    try {
+      const apiResponse = await fetch("/api/classify", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: text,
+          currentDate: getDateString(new Date()),
+        }),
+        signal: controller.signal,
+      });
+
+      const responseData = await apiResponse.json();
+
+      if (!apiResponse.ok) {
+        throw new Error(
+          responseData && responseData.error
+            ? responseData.error
+            : "AI sorting was unavailable."
+        );
+      }
+
+      if (
+        !responseData ||
+        !responseData.classification
+      ) {
+        throw new Error(
+          "The AI response did not contain a classification."
+        );
+      }
+
+      return normalizeClassification(
+        responseData.classification
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  }
+
+  function normalizeClassification(classification) {
+    const allowedCategories = [
+      "Purchasing",
+      "Operations",
+      "Leadership",
+      "Personal",
+      "Ideas",
+      "General",
+    ];
+
+    const allowedPriorities = [
+      "High",
+      "Normal",
+      "Low",
+    ];
+
+    const allowedContexts = [
+      "Calls",
+      "Computer",
+      "Errands",
+      "Work",
+      "Home",
+      "Anywhere",
+    ];
+
+    return {
+      summary:
+        typeof classification.summary === "string"
+          ? classification.summary
+          : "",
+      category:
+        allowedCategories.indexOf(
+          classification.category
+        ) >= 0
+          ? classification.category
+          : "General",
+      priority:
+        allowedPriorities.indexOf(
+          classification.priority
+        ) >= 0
+          ? classification.priority
+          : "Normal",
+      dueDate:
+        typeof classification.dueDate === "string"
+          ? classification.dueDate
+          : "",
+      context:
+        allowedContexts.indexOf(
+          classification.context
+        ) >= 0
+          ? classification.context
+          : "",
+      project:
+        typeof classification.project === "string"
+          ? classification.project
+          : "",
+      estimatedMinutes:
+        Number.isInteger(
+          classification.estimatedMinutes
+        )
+          ? classification.estimatedMinutes
+          : null,
+      needsReview:
+        typeof classification.needsReview === "boolean"
+          ? classification.needsReview
+          : true,
+    };
+  }
+
+  function setCaptureButtonBusy(isBusy) {
+    if (!captureButton) {
+      return;
+    }
+
+    captureButton.disabled = isBusy;
+    captureButton.textContent = isBusy
+      ? "Capturing..."
+      : "Capture";
   }
 
   function analyzeTask(text) {
@@ -158,6 +336,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     let priority = "Normal";
     let dueDate = "";
+    let context = "";
 
     if (
       lowerText.includes("supplier") ||
@@ -211,10 +390,36 @@ document.addEventListener("DOMContentLoaded", function () {
       dueDate = getDateString(tomorrow);
     }
 
+    if (
+      lowerText.includes("call") ||
+      lowerText.includes("phone")
+    ) {
+      context = "Calls";
+    } else if (
+      lowerText.includes("computer") ||
+      lowerText.includes("email")
+    ) {
+      context = "Computer";
+    } else if (
+      lowerText.includes("pick up") ||
+      lowerText.includes("store")
+    ) {
+      context = "Errands";
+    } else if (category === "Personal") {
+      context = "Home";
+    } else {
+      context = "Work";
+    }
+
     return {
+      summary: text,
       category: category,
       priority: priority,
       dueDate: dueDate,
+      context: context,
+      project: "",
+      estimatedMinutes: null,
+      needsReview: true,
     };
   }
 
@@ -301,7 +506,7 @@ document.addEventListener("DOMContentLoaded", function () {
         emptyBox.innerHTML =
           "<span class='empty-icon'>🧠</span>" +
           "<h3>Nothing needs review</h3>" +
-          "<p>New captured items will appear here.</p>";
+          "<p>Only unclear captures will appear here.</p>";
       }
 
       listElement.appendChild(emptyBox);
@@ -336,6 +541,26 @@ document.addEventListener("DOMContentLoaded", function () {
             : "No due date"
         )
       );
+
+      if (task.context) {
+        meta.appendChild(
+          createTag(task.context)
+        );
+      }
+
+      if (task.project) {
+        meta.appendChild(
+          createTag("Project: " + task.project)
+        );
+      }
+
+      if (task.estimatedMinutes) {
+        meta.appendChild(
+          createTag(
+            task.estimatedMinutes + " min"
+          )
+        );
+      }
 
       const actions = document.createElement("div");
       actions.className = "task-card-actions";
@@ -407,7 +632,11 @@ document.addEventListener("DOMContentLoaded", function () {
       );
 
       card.appendChild(heading);
-      card.appendChild(originalText);
+
+      if (task.originalText !== task.title) {
+        card.appendChild(originalText);
+      }
+
       card.appendChild(meta);
       card.appendChild(actions);
 

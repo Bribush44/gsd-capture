@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "gsd-capture-v2";
+const CACHE_NAME = "gsd-capture-v3";
 
 const APP_SHELL = [
   "/",
