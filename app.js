@@ -616,9 +616,9 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
 
     setMicrosoftTestTaskMessage(
-      "Ready to create one test task in " +
+      "Approved captures will sync automatically to " +
         settings.microsoftListName +
-        "."
+        ". You can still use the test button to verify the connection."
     );
   }
 
@@ -733,6 +733,333 @@ document.addEventListener("DOMContentLoaded", async function () {
     } finally {
       setMicrosoftTestTaskButtonBusy(false);
     }
+  }
+
+  function canSyncTaskToMicrosoft(task) {
+    return Boolean(
+      navigator.onLine &&
+      microsoftAuthReady &&
+      microsoftAuth &&
+      microsoftAccount &&
+      ((task && task.microsoftListId) || settings.microsoftListId)
+    );
+  }
+
+  function getMicrosoftListIdForTask(task) {
+    return task.microsoftListId || settings.microsoftListId;
+  }
+
+  function getMicrosoftListNameForTask(task) {
+    return (
+      task.microsoftListName ||
+      settings.microsoftListName ||
+      "Microsoft To Do"
+    );
+  }
+
+  async function syncTaskToMicrosoft(task) {
+    if (!task) {
+      return { status: "failed" };
+    }
+
+    if (task.microsoftTaskId) {
+      task.microsoftSyncStatus = "synced";
+      saveTasks();
+      renderEverything();
+      return { status: "synced", taskId: task.microsoftTaskId };
+    }
+
+    if (task.needsReview) {
+      task.microsoftSyncStatus = "waiting-review";
+      saveTasks();
+      renderEverything();
+      return { status: "waiting-review" };
+    }
+
+    if (!canSyncTaskToMicrosoft(task)) {
+      task.microsoftSyncStatus = "local-only";
+      task.microsoftSyncError =
+        "Microsoft To Do is not connected or no destination list is selected.";
+      saveTasks();
+      renderEverything();
+      return { status: "local-only" };
+    }
+
+    const hadPreviousAttempt = Boolean(
+      task.microsoftSyncAttemptedAt
+    );
+
+    task.microsoftSyncStatus = "syncing";
+    task.microsoftSyncError = "";
+    task.microsoftListId = getMicrosoftListIdForTask(task);
+    task.microsoftListName = getMicrosoftListNameForTask(task);
+    task.microsoftSyncAttemptedAt = new Date().toISOString();
+    saveTasks();
+    renderEverything();
+
+    try {
+      const accessToken = await acquireMicrosoftAccessToken();
+
+      if (!accessToken) {
+        task.microsoftSyncStatus = "pending";
+        saveTasks();
+        renderEverything();
+        return { status: "interaction-required" };
+      }
+
+      if (hadPreviousAttempt) {
+        const existingTask =
+          await findExistingMicrosoftTask(task, accessToken);
+
+        if (existingTask && existingTask.id) {
+          markTaskMicrosoftSynced(task, existingTask);
+          return {
+            status: "synced",
+            taskId: existingTask.id,
+            recovered: true,
+          };
+        }
+      }
+
+      const responseData = await createMicrosoftTask(
+        task,
+        accessToken
+      );
+
+      markTaskMicrosoftSynced(task, responseData);
+
+      return {
+        status: "synced",
+        taskId: responseData.id,
+      };
+    } catch (error) {
+      console.error("Microsoft To Do task sync failed:", error);
+
+      task.microsoftSyncStatus = "failed";
+      task.microsoftSyncError =
+        error && error.message
+          ? error.message
+          : "Microsoft To Do sync failed.";
+      saveTasks();
+      renderEverything();
+
+      return { status: "failed", error: error };
+    }
+  }
+
+  async function createMicrosoftTask(task, accessToken) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(function () {
+      controller.abort();
+    }, 15000);
+
+    let response;
+
+    try {
+      response = await fetch(
+        "https://graph.microsoft.com/v1.0/me/todo/lists/" +
+          encodeURIComponent(getMicrosoftListIdForTask(task)) +
+          "/tasks",
+        {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + accessToken,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(
+            buildMicrosoftTaskPayload(task)
+          ),
+          signal: controller.signal,
+        }
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+
+    const responseData = await response.json().catch(function () {
+      return null;
+    });
+
+    if (!response.ok) {
+      const graphMessage =
+        responseData &&
+        responseData.error &&
+        responseData.error.message
+          ? responseData.error.message
+          : "Microsoft Graph returned " + response.status + ".";
+
+      throw new Error(graphMessage);
+    }
+
+    if (!responseData || !responseData.id) {
+      throw new Error(
+        "Microsoft To Do did not return a task ID."
+      );
+    }
+
+    return responseData;
+  }
+
+  function buildMicrosoftTaskPayload(task) {
+    const notes = [];
+
+    if (task.originalText && task.originalText !== task.title) {
+      notes.push("Original capture: " + task.originalText);
+    }
+
+    notes.push("Category: " + (task.category || "General"));
+    notes.push("Priority: " + (task.priority || "Normal"));
+
+    if (task.context) {
+      notes.push("Context: " + task.context);
+    }
+
+    if (task.project) {
+      notes.push("Project: " + task.project);
+    }
+
+    if (task.estimatedMinutes) {
+      notes.push(
+        "Estimated duration: " +
+          task.estimatedMinutes +
+          " minutes"
+      );
+    }
+
+    notes.push(
+      "Sorted by: " +
+        (task.sortingMethod === "ai"
+          ? "GSD Capture AI"
+          : "GSD Capture local sorting")
+    );
+    notes.push(getMicrosoftTaskMarker(task));
+
+    const payload = {
+      title: task.title,
+      importance: getMicrosoftImportance(task.priority),
+      body: {
+        contentType: "text",
+        content: notes.join("\n"),
+      },
+    };
+
+    if (task.dueDate) {
+      payload.dueDateTime = {
+        dateTime: task.dueDate + "T12:00:00",
+        timeZone: "UTC",
+      };
+    }
+
+    return payload;
+  }
+
+  function getMicrosoftImportance(priority) {
+    if (priority === "High") {
+      return "high";
+    }
+
+    if (priority === "Low") {
+      return "low";
+    }
+
+    return "normal";
+  }
+
+  function getMicrosoftTaskMarker(task) {
+    return "GSD Capture ID: " + task.id;
+  }
+
+  async function findExistingMicrosoftTask(task, accessToken) {
+    let nextUrl =
+      "https://graph.microsoft.com/v1.0/me/todo/lists/" +
+      encodeURIComponent(getMicrosoftListIdForTask(task)) +
+      "/tasks";
+    const marker = getMicrosoftTaskMarker(task);
+    let pageCount = 0;
+
+    while (nextUrl && pageCount < 20) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(function () {
+        controller.abort();
+      }, 15000);
+      let response;
+
+      try {
+        response = await fetch(nextUrl, {
+          headers: {
+            Authorization: "Bearer " + accessToken,
+            Accept: "application/json",
+          },
+          signal: controller.signal,
+        });
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+
+      const data = await response.json().catch(function () {
+        return null;
+      });
+
+      if (!response.ok) {
+        const graphMessage =
+          data && data.error && data.error.message
+            ? data.error.message
+            : "Microsoft Graph returned " + response.status + ".";
+        throw new Error(graphMessage);
+      }
+
+      const remoteTasks =
+        data && Array.isArray(data.value) ? data.value : [];
+
+      const match = remoteTasks.find(function (remoteTask) {
+        return Boolean(
+          remoteTask &&
+          remoteTask.body &&
+          typeof remoteTask.body.content === "string" &&
+          remoteTask.body.content.indexOf(marker) !== -1
+        );
+      });
+
+      if (match) {
+        return match;
+      }
+
+      nextUrl =
+        data && typeof data["@odata.nextLink"] === "string"
+          ? data["@odata.nextLink"]
+          : "";
+      pageCount += 1;
+    }
+
+    return null;
+  }
+
+  function markTaskMicrosoftSynced(task, microsoftTask) {
+    task.microsoftTaskId = microsoftTask.id;
+    task.microsoftListId = getMicrosoftListIdForTask(task);
+    task.microsoftListName = getMicrosoftListNameForTask(task);
+    task.microsoftSyncStatus = "synced";
+    task.microsoftSyncError = "";
+    task.microsoftSyncedAt = new Date().toISOString();
+    saveTasks();
+    renderEverything();
+  }
+
+  async function approveTaskAndSync(task) {
+    task.needsReview = false;
+    task.microsoftSyncStatus = "pending";
+    saveTasks();
+    renderEverything();
+
+    if (!canSyncTaskToMicrosoft(task)) {
+      task.microsoftSyncStatus = "local-only";
+      saveTasks();
+      renderEverything();
+      return;
+    }
+
+    await syncTaskToMicrosoft(task);
   }
 
   function setMicrosoftTestTaskButtonBusy(isBusy) {
@@ -883,6 +1210,17 @@ document.addEventListener("DOMContentLoaded", async function () {
         plannedForToday: false,
         completed: false,
         createdAt: new Date().toISOString(),
+        microsoftTaskId: "",
+        microsoftListId: "",
+        microsoftListName: "",
+        microsoftSyncStatus:
+          typeof analysis.needsReview === "boolean" &&
+          analysis.needsReview === false
+            ? "pending"
+            : "waiting-review",
+        microsoftSyncError: "",
+        microsoftSyncAttemptedAt: "",
+        microsoftSyncedAt: "",
       };
 
       tasks.unshift(newTask);
@@ -891,17 +1229,58 @@ document.addEventListener("DOMContentLoaded", async function () {
       taskInput.value = "";
       renderEverything();
 
-      if (usedAi) {
+      const baseMessage = usedAi
+        ? newTask.needsReview
+          ? "Captured and sorted with AI. This item needs review."
+          : "Captured and sorted with AI."
+        : navigator.onLine
+          ? "Captured successfully using local sorting."
+          : "Captured offline using local sorting.";
+
+      if (newTask.needsReview) {
         showCaptureMessage(
-          newTask.needsReview
-            ? "Captured and sorted with AI. This item needs review."
-            : "Captured and sorted with AI."
+          baseMessage +
+            " Approve it before sending it to Microsoft To Do."
+        );
+        return;
+      }
+
+      if (!canSyncTaskToMicrosoft(newTask)) {
+        newTask.microsoftSyncStatus = "local-only";
+        saveTasks();
+        renderEverything();
+
+        showCaptureMessage(
+          baseMessage +
+            " Saved locally. Connect Microsoft To Do and select a list to send it later."
+        );
+        return;
+      }
+
+      showCaptureMessage(
+        baseMessage + " Sending to Microsoft To Do..."
+      );
+
+      const syncResult = await syncTaskToMicrosoft(newTask);
+
+      if (syncResult.status === "synced") {
+        showCaptureMessage(
+          baseMessage +
+            " Added to " +
+            (newTask.microsoftListName ||
+              settings.microsoftListName ||
+              "Microsoft To Do") +
+            "."
+        );
+      } else if (syncResult.status === "interaction-required") {
+        showCaptureMessage(
+          baseMessage +
+            " Saved locally. Microsoft needs you to finish signing in before it can sync."
         );
       } else {
         showCaptureMessage(
-          navigator.onLine
-            ? "Captured successfully using local sorting."
-            : "Captured offline using local sorting."
+          baseMessage +
+            " Saved locally, but Microsoft To Do sync did not finish. Use Send to To Do on the task to retry."
         );
       }
     } catch (error) {
@@ -1277,6 +1656,10 @@ document.addEventListener("DOMContentLoaded", async function () {
         );
       }
 
+      meta.appendChild(
+        createTag(getMicrosoftSyncLabel(task))
+      );
+
       const actions = document.createElement("div");
       actions.className = "task-card-actions";
 
@@ -1286,9 +1669,7 @@ document.addEventListener("DOMContentLoaded", async function () {
             "Approve",
             "",
             function () {
-              updateTask(task.id, function (item) {
-                item.needsReview = false;
-              });
+              approveTaskAndSync(task);
             }
           )
         );
@@ -1308,6 +1689,22 @@ document.addEventListener("DOMContentLoaded", async function () {
           }
         )
       );
+
+      if (
+        !task.needsReview &&
+        !task.microsoftTaskId &&
+        task.microsoftSyncStatus !== "syncing"
+      ) {
+        actions.appendChild(
+          createButton(
+            "Send to To Do",
+            "",
+            function () {
+              syncTaskToMicrosoft(task);
+            }
+          )
+        );
+      }
 
       actions.appendChild(
         createButton(
@@ -1357,6 +1754,26 @@ document.addEventListener("DOMContentLoaded", async function () {
 
       listElement.appendChild(card);
     });
+  }
+
+  function getMicrosoftSyncLabel(task) {
+    if (task.microsoftTaskId || task.microsoftSyncStatus === "synced") {
+      return "To Do: Synced";
+    }
+
+    if (task.needsReview || task.microsoftSyncStatus === "waiting-review") {
+      return "To Do: Waiting for review";
+    }
+
+    if (task.microsoftSyncStatus === "syncing") {
+      return "To Do: Sending...";
+    }
+
+    if (task.microsoftSyncStatus === "failed") {
+      return "To Do: Retry needed";
+    }
+
+    return "To Do: Local only";
   }
 
   function createTag(text) {
@@ -1581,7 +1998,17 @@ document.addEventListener("DOMContentLoaded", async function () {
         };
       }
 
-      return JSON.parse(saved);
+      const parsed = JSON.parse(saved);
+
+      return {
+        userName: "",
+        defaultList: "General",
+        aiSorting: true,
+        calendarSuggestions: true,
+        microsoftListId: "",
+        microsoftListName: "",
+        ...(parsed && typeof parsed === "object" ? parsed : {}),
+      };
     } catch (error) {
       return {
         userName: "",
