@@ -69,6 +69,12 @@ document.addEventListener("DOMContentLoaded", async function () {
   const microsoftListMessage = document.getElementById(
     "microsoftListMessage"
   );
+  const createMicrosoftTestTaskButton = document.getElementById(
+    "createMicrosoftTestTaskButton"
+  );
+  const microsoftTestTaskMessage = document.getElementById(
+    "microsoftTestTaskMessage"
+  );
 
   const voiceButton = document.getElementById("voiceButton");
   const captureButton = captureForm
@@ -162,6 +168,13 @@ document.addEventListener("DOMContentLoaded", async function () {
       microsoftListSelect.addEventListener(
         "change",
         saveMicrosoftListSelection
+      );
+    }
+
+    if (createMicrosoftTestTaskButton) {
+      createMicrosoftTestTaskButton.addEventListener(
+        "click",
+        createMicrosoftTestTask
       );
     }
   }
@@ -519,8 +532,17 @@ document.addEventListener("DOMContentLoaded", async function () {
       emptyOption.textContent = "No Microsoft To Do lists found";
       microsoftListSelect.appendChild(emptyOption);
       microsoftListSelect.disabled = true;
+
+      if (createMicrosoftTestTaskButton) {
+        createMicrosoftTestTaskButton.disabled = true;
+      }
+
       setMicrosoftListMessage(
         "Microsoft returned no To Do lists for this account.",
+        true
+      );
+      setMicrosoftTestTaskMessage(
+        "A destination list is required before creating a test task.",
         true
       );
       return;
@@ -545,6 +567,10 @@ document.addEventListener("DOMContentLoaded", async function () {
     microsoftListSelect.value = selectedList.id;
     microsoftListSelect.disabled = false;
     saveMicrosoftListSelection();
+
+    if (createMicrosoftTestTaskButton) {
+      createMicrosoftTestTaskButton.disabled = false;
+    }
 
     setMicrosoftListMessage(
       "Loaded " +
@@ -584,6 +610,152 @@ document.addEventListener("DOMContentLoaded", async function () {
         settings.microsoftListName +
         "."
     );
+
+    if (createMicrosoftTestTaskButton) {
+      createMicrosoftTestTaskButton.disabled = false;
+    }
+
+    setMicrosoftTestTaskMessage(
+      "Ready to create one test task in " +
+        settings.microsoftListName +
+        "."
+    );
+  }
+
+  async function createMicrosoftTestTask() {
+    if (!navigator.onLine) {
+      setMicrosoftTestTaskMessage(
+        "Connect to the internet before creating a Microsoft To Do task.",
+        true
+      );
+      return;
+    }
+
+    if (!microsoftAuthReady || !microsoftAuth || !microsoftAccount) {
+      setMicrosoftTestTaskMessage(
+        "Connect your Microsoft account first.",
+        true
+      );
+      return;
+    }
+
+    if (!settings.microsoftListId) {
+      setMicrosoftTestTaskMessage(
+        "Load your To Do lists and choose a destination first.",
+        true
+      );
+      return;
+    }
+
+    setMicrosoftTestTaskButtonBusy(true);
+    setMicrosoftTestTaskMessage(
+      "Creating a test task in " +
+        (settings.microsoftListName || "Microsoft To Do") +
+        "..."
+    );
+
+    try {
+      const accessToken = await acquireMicrosoftAccessToken();
+
+      if (!accessToken) {
+        return;
+      }
+
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(function () {
+        controller.abort();
+      }, 15000);
+
+      let response;
+
+      try {
+        response = await fetch(
+          "https://graph.microsoft.com/v1.0/me/todo/lists/" +
+            encodeURIComponent(settings.microsoftListId) +
+            "/tasks",
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer " + accessToken,
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              title: "GSD Capture connection test",
+              body: {
+                contentType: "text",
+                content:
+                  "Created by GSD Capture to verify Microsoft To Do integration on " +
+                  new Date().toLocaleString() +
+                  ".",
+              },
+            }),
+            signal: controller.signal,
+          }
+        );
+      } finally {
+        window.clearTimeout(timeoutId);
+      }
+
+      const responseData = await response.json().catch(function () {
+        return null;
+      });
+
+      if (!response.ok) {
+        const graphMessage =
+          responseData &&
+          responseData.error &&
+          responseData.error.message
+            ? responseData.error.message
+            : "Microsoft Graph returned " + response.status + ".";
+
+        throw new Error(graphMessage);
+      }
+
+      setMicrosoftTestTaskMessage(
+        'Created "' +
+          (responseData && responseData.title
+            ? responseData.title
+            : "GSD Capture connection test") +
+          '" in ' +
+          (settings.microsoftListName || "Microsoft To Do") +
+          "."
+      );
+    } catch (error) {
+      console.error("Creating Microsoft To Do test task failed:", error);
+
+      const message =
+        error && error.name === "AbortError"
+          ? "Microsoft To Do took too long to respond. Please try again."
+          : "The test task could not be created. Please try again.";
+
+      setMicrosoftTestTaskMessage(message, true);
+    } finally {
+      setMicrosoftTestTaskButtonBusy(false);
+    }
+  }
+
+  function setMicrosoftTestTaskButtonBusy(isBusy) {
+    if (!createMicrosoftTestTaskButton) {
+      return;
+    }
+
+    createMicrosoftTestTaskButton.disabled = isBusy;
+    createMicrosoftTestTaskButton.textContent = isBusy
+      ? "Creating Test Task..."
+      : "Create Test Task";
+  }
+
+  function setMicrosoftTestTaskMessage(message, isError) {
+    if (!microsoftTestTaskMessage) {
+      return;
+    }
+
+    microsoftTestTaskMessage.textContent = message;
+    microsoftTestTaskMessage.classList.toggle(
+      "error-message",
+      Boolean(isError)
+    );
   }
 
   function clearMicrosoftListOptions() {
@@ -595,8 +767,15 @@ document.addEventListener("DOMContentLoaded", async function () {
       microsoftListSelect.disabled = true;
     }
 
+    if (createMicrosoftTestTaskButton) {
+      createMicrosoftTestTaskButton.disabled = true;
+    }
+
     setMicrosoftListMessage(
       "No Microsoft To Do lists loaded yet."
+    );
+    setMicrosoftTestTaskMessage(
+      "Load your lists and choose a destination before creating a test task."
     );
   }
 

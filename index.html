@@ -216,8 +216,21 @@
                 Load To Do Lists
               </button>
 
+              <button
+                id="createMicrosoftTestTaskButton"
+                class="secondary-button"
+                type="button"
+                disabled
+              >
+                Create Test Task
+              </button>
+
               <p id="microsoftListMessage" class="microsoft-list-message" aria-live="polite">
                 No Microsoft To Do lists loaded yet.
+              </p>
+
+              <p id="microsoftTestTaskMessage" class="microsoft-list-message" aria-live="polite">
+                Load your lists and choose a destination before creating a test task.
               </p>
             </div>
 
@@ -299,6 +312,6 @@
   </div>
 
   <script src="vendor/msal-browser.min.js?v=1"></script>
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
