@@ -21,6 +21,8 @@ const MICROSOFT_SCOPES = [
   "offline_access",
   "User.Read",
   "Tasks.ReadWrite",
+  "Calendars.ReadWrite",
+  "MailboxSettings.Read",
 ];
 
 export default async function handler(
