@@ -98,6 +98,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   let microsoftAccount = null;
   let microsoftAuthReady = false;
   let microsoftTodoLists = [];
+  let microsoftActionQueueRunning = false;
 
   if (
     !captureForm ||
@@ -116,6 +117,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   registerEvents();
   renderEverything();
   await initializeMicrosoftSignIn();
+  await processPendingMicrosoftActions();
 
   function registerEvents() {
     captureForm.addEventListener("submit", captureTask);
@@ -191,6 +193,10 @@ document.addEventListener("DOMContentLoaded", async function () {
         saveMicrosoftRoutingMode
       );
     }
+
+    window.addEventListener("online", function () {
+      processPendingMicrosoftActions();
+    });
   }
 
   async function initializeMicrosoftSignIn() {
@@ -1351,6 +1357,278 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
   }
 
+
+  function hasMicrosoftTaskReference(task) {
+    return Boolean(
+      task &&
+        task.microsoftTaskId &&
+        task.microsoftListId
+    );
+  }
+
+  async function updateMicrosoftTaskCompletion(
+    listId,
+    taskId,
+    accessToken
+  ) {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(function () {
+      controller.abort();
+    }, 15000);
+
+    let response;
+
+    try {
+      response = await fetch(
+        "https://graph.microsoft.com/v1.0/me/todo/lists/" +
+          encodeURIComponent(listId) +
+          "/tasks/" +
+          encodeURIComponent(taskId),
+        {
+          method: "PATCH",
+          headers: {
+            Authorization: "Bearer " + accessToken,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            status: "completed",
+          }),
+          signal: controller.signal,
+        }
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+
+    if (!response.ok && response.status !== 404) {
+      const data = await response.json().catch(function () {
+        return null;
+      });
+      const graphMessage =
+        data && data.error && data.error.message
+          ? data.error.message
+          : "Microsoft Graph returned " + response.status + ".";
+      throw new Error(graphMessage);
+    }
+  }
+
+  async function processMicrosoftActionForTask(
+    task,
+    accessTokenOverride
+  ) {
+    if (!task || !task.microsoftPendingAction) {
+      return { status: "none" };
+    }
+
+    const action = task.microsoftPendingAction;
+
+    if (!hasMicrosoftTaskReference(task)) {
+      task.microsoftPendingAction = "";
+      task.microsoftActionError = "";
+
+      if (action === "delete") {
+        tasks = tasks.filter(function (item) {
+          return item.id !== task.id;
+        });
+      }
+
+      saveTasks();
+      renderEverything();
+      return { status: "synced" };
+    }
+
+    if (
+      !navigator.onLine ||
+      !microsoftAuthReady ||
+      !microsoftAuth ||
+      !microsoftAccount
+    ) {
+      return { status: "pending" };
+    }
+
+    try {
+      const accessToken =
+        accessTokenOverride ||
+        (await acquireMicrosoftAccessToken());
+
+      if (!accessToken) {
+        return { status: "interaction-required" };
+      }
+
+      if (action === "complete") {
+        await updateMicrosoftTaskCompletion(
+          task.microsoftListId,
+          task.microsoftTaskId,
+          accessToken
+        );
+
+        task.microsoftPendingAction = "";
+        task.microsoftActionError = "";
+        task.microsoftActionSyncedAt = new Date().toISOString();
+        saveTasks();
+        renderEverything();
+
+        return { status: "synced" };
+      }
+
+      if (action === "delete") {
+        await deleteMicrosoftTaskFromList(
+          task.microsoftListId,
+          task.microsoftTaskId,
+          accessToken
+        );
+
+        tasks = tasks.filter(function (item) {
+          return item.id !== task.id;
+        });
+        saveTasks();
+        renderEverything();
+
+        return { status: "synced" };
+      }
+
+      task.microsoftPendingAction = "";
+      task.microsoftActionError = "";
+      saveTasks();
+      renderEverything();
+      return { status: "none" };
+    } catch (error) {
+      console.error(
+        "Microsoft To Do action sync failed:",
+        error
+      );
+
+      task.microsoftActionError =
+        error && error.message
+          ? error.message
+          : "Microsoft To Do action sync failed.";
+      saveTasks();
+      renderEverything();
+
+      return { status: "pending", error: error };
+    }
+  }
+
+  async function processPendingMicrosoftActions() {
+    if (
+      microsoftActionQueueRunning ||
+      !navigator.onLine ||
+      !microsoftAuthReady ||
+      !microsoftAuth ||
+      !microsoftAccount
+    ) {
+      return;
+    }
+
+    const pendingTasks = tasks.filter(function (task) {
+      return Boolean(task.microsoftPendingAction);
+    });
+
+    if (pendingTasks.length === 0) {
+      return;
+    }
+
+    microsoftActionQueueRunning = true;
+
+    try {
+      const accessToken = await acquireMicrosoftAccessToken();
+
+      if (!accessToken) {
+        return;
+      }
+
+      for (const pendingTask of pendingTasks) {
+        await processMicrosoftActionForTask(
+          pendingTask,
+          accessToken
+        );
+      }
+    } catch (error) {
+      console.error(
+        "Processing pending Microsoft To Do actions failed:",
+        error
+      );
+    } finally {
+      microsoftActionQueueRunning = false;
+    }
+  }
+
+  async function completeTaskAndSync(task) {
+    if (!task || task.localDeleted || task.completed) {
+      return;
+    }
+
+    task.completed = true;
+    task.needsReview = false;
+    task.plannedForToday = false;
+    task.microsoftActionError = "";
+
+    if (hasMicrosoftTaskReference(task)) {
+      task.microsoftPendingAction = "complete";
+    } else {
+      task.microsoftPendingAction = "";
+    }
+
+    saveTasks();
+    renderEverything();
+
+    if (!task.microsoftPendingAction) {
+      showCaptureMessage(
+        "Completed in GSD Capture. This item did not have a Microsoft To Do copy."
+      );
+      return;
+    }
+
+    const result = await processMicrosoftActionForTask(task);
+
+    if (result.status === "synced") {
+      showCaptureMessage(
+        "Completed in GSD Capture and Microsoft To Do."
+      );
+      return;
+    }
+
+    showCaptureMessage(
+      "Completed in GSD Capture. Microsoft To Do will update automatically when the connection is available."
+    );
+  }
+
+  async function deleteTaskAndSync(task) {
+    if (!task) {
+      return;
+    }
+
+    if (!hasMicrosoftTaskReference(task)) {
+      tasks = tasks.filter(function (item) {
+        return item.id !== task.id;
+      });
+      saveTasks();
+      renderEverything();
+      showCaptureMessage("Deleted from GSD Capture.");
+      return;
+    }
+
+    task.localDeleted = true;
+    task.microsoftPendingAction = "delete";
+    task.microsoftActionError = "";
+    saveTasks();
+    renderEverything();
+
+    const result = await processMicrosoftActionForTask(task);
+
+    if (result.status === "synced") {
+      showCaptureMessage(
+        "Deleted from GSD Capture and Microsoft To Do."
+      );
+      return;
+    }
+
+    showCaptureMessage(
+      "Hidden from GSD Capture. Microsoft To Do will delete it automatically when the connection is available."
+    );
+  }
+
   async function moveReviewedTaskToDestination(task) {
     if (!canSyncTaskToMicrosoft(task)) {
       task.microsoftSyncStatus = "failed";
@@ -1659,6 +1937,10 @@ document.addEventListener("DOMContentLoaded", async function () {
         microsoftMoveTargetTaskId: "",
         microsoftMoveTargetListId: "",
         microsoftMoveTargetListName: "",
+        microsoftPendingAction: "",
+        microsoftActionError: "",
+        microsoftActionSyncedAt: "",
+        localDeleted: false,
       };
 
       tasks.unshift(newTask);
@@ -1969,7 +2251,7 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   function renderInbox() {
     const openTasks = tasks.filter(function (task) {
-      return !task.completed;
+      return !task.completed && !task.localDeleted;
     });
 
     renderTaskList(
@@ -1983,7 +2265,8 @@ document.addEventListener("DOMContentLoaded", async function () {
     const todayTasks = tasks.filter(function (task) {
       return (
         task.plannedForToday &&
-        !task.completed
+        !task.completed &&
+        !task.localDeleted
       );
     });
 
@@ -1998,7 +2281,8 @@ document.addEventListener("DOMContentLoaded", async function () {
     const reviewTasks = tasks.filter(function (task) {
       return (
         task.needsReview &&
-        !task.completed
+        !task.completed &&
+        !task.localDeleted
       );
     });
 
@@ -2145,11 +2429,7 @@ document.addEventListener("DOMContentLoaded", async function () {
           "Complete",
           "complete-button",
           function () {
-            updateTask(task.id, function (item) {
-              item.completed = true;
-              item.needsReview = false;
-              item.plannedForToday = false;
-            });
+            completeTaskAndSync(task);
           }
         )
       );
@@ -2167,12 +2447,7 @@ document.addEventListener("DOMContentLoaded", async function () {
               return;
             }
 
-            tasks = tasks.filter(function (item) {
-              return item.id !== task.id;
-            });
-
-            saveTasks();
-            renderEverything();
+            deleteTaskAndSync(task);
           }
         )
       );
@@ -2264,15 +2539,19 @@ document.addEventListener("DOMContentLoaded", async function () {
   }
 
   function updateCounts() {
-    const openTasks = tasks.filter(function (task) {
+    const visibleTasks = tasks.filter(function (task) {
+      return !task.localDeleted;
+    });
+
+    const openTasks = visibleTasks.filter(function (task) {
       return !task.completed;
     });
 
-    const completedTasks = tasks.filter(function (task) {
+    const completedTasks = visibleTasks.filter(function (task) {
       return task.completed;
     });
 
-    const reviewTasks = tasks.filter(function (task) {
+    const reviewTasks = visibleTasks.filter(function (task) {
       return task.needsReview && !task.completed;
     });
 
@@ -2285,7 +2564,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
 
     if (capturedTotal) {
-      capturedTotal.textContent = tasks.length;
+      capturedTotal.textContent = visibleTasks.length;
     }
 
     if (completedTotal) {
