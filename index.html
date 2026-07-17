@@ -19,7 +19,7 @@
 
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=6" />
 </head>
 
 <body>
@@ -201,6 +201,74 @@
               Sign in to connect GSD Capture to your Microsoft account.
             </p>
 
+            <section
+              id="voiceSetupCard"
+              class="voice-setup-card"
+              aria-labelledby="voiceSetupHeading"
+            >
+              <div class="voice-setup-heading">
+                <div>
+                  <p class="section-label">SIRI & VOICE CAPTURE</p>
+                  <h4 id="voiceSetupHeading">Background capture</h4>
+                </div>
+
+                <span id="voiceSetupBadge" class="connection-badge">
+                  Not set up
+                </span>
+              </div>
+
+              <p
+                id="voiceSetupStatus"
+                class="microsoft-list-message"
+                aria-live="polite"
+              >
+                Connect Microsoft To Do first, then set up private background capture.
+              </p>
+
+              <button
+                id="startVoiceSetupButton"
+                class="secondary-button"
+                type="button"
+                disabled
+              >
+                Set Up Voice Capture
+              </button>
+
+              <div id="voiceSetupResult" class="voice-setup-result hidden">
+                <label for="voiceSetupKey">Your private Voice Capture key</label>
+
+                <input
+                  id="voiceSetupKey"
+                  type="text"
+                  readonly
+                  autocomplete="off"
+                  spellcheck="false"
+                />
+
+                <button
+                  id="copyVoiceSetupKeyButton"
+                  class="secondary-button"
+                  type="button"
+                >
+                  Copy Voice Key
+                </button>
+
+                <a
+                  id="installCaptureShortcutButton"
+                  class="secondary-button"
+                  href="https://www.icloud.com/shortcuts/3f899fbab88b4b9f871b841a75a2019d"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Install Capture Shortcut
+                </a>
+
+                <p class="voice-key-warning">
+                  Keep this key private. It allows your Shortcut to add tasks to your Microsoft To Do account.
+                </p>
+              </div>
+            </section>
+
             <div id="microsoftListPanel" class="microsoft-list-panel hidden">
               <label for="microsoftListSelect">Destination To Do list</label>
 
@@ -328,6 +396,6 @@
   </div>
 
   <script src="vendor/msal-browser.min.js?v=1"></script>
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

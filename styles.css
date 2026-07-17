@@ -544,6 +544,68 @@ select:focus {
   display: none !important;
 }
 
+.voice-setup-card {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+}
+
+.voice-setup-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.voice-setup-heading h4 {
+  margin: 4px 0 0;
+  font-size: 0.95rem;
+}
+
+.voice-setup-card .secondary-button {
+  width: 100%;
+}
+
+.voice-setup-result {
+  display: grid;
+  gap: 10px;
+  padding-top: 4px;
+}
+
+.voice-setup-result label {
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.voice-setup-result input {
+  width: 100%;
+  height: auto;
+  min-height: 50px;
+  margin: 0;
+  padding: 12px 14px;
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Monaco,
+    Consolas,
+    monospace;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.voice-key-warning {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
 .microsoft-list-panel {
   display: grid;
   gap: 10px;

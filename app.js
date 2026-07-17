@@ -14,6 +14,11 @@ document.addEventListener("DOMContentLoaded", async function () {
   ];
   const MICROSOFT_REVIEW_LIST_NAME = "GSD Review";
 
+  const VOICE_SETUP_PENDING_KEY =
+    "gsdVoiceSetupPending";
+  const VOICE_SETUP_CONNECTION_KEY =
+    "gsdVoiceSetupConnection";
+
   const captureForm = document.getElementById("captureForm");
   const taskInput = document.getElementById("taskInput");
   const captureMessage = document.getElementById("captureMessage");
@@ -83,6 +88,28 @@ document.addEventListener("DOMContentLoaded", async function () {
     "microsoftRoutingMessage"
   );
 
+  const voiceSetupCard = document.getElementById(
+    "voiceSetupCard"
+  );
+  const voiceSetupBadge = document.getElementById(
+    "voiceSetupBadge"
+  );
+  const voiceSetupStatus = document.getElementById(
+    "voiceSetupStatus"
+  );
+  const startVoiceSetupButton = document.getElementById(
+    "startVoiceSetupButton"
+  );
+  const voiceSetupResult = document.getElementById(
+    "voiceSetupResult"
+  );
+  const voiceSetupKey = document.getElementById(
+    "voiceSetupKey"
+  );
+  const copyVoiceSetupKeyButton = document.getElementById(
+    "copyVoiceSetupKeyButton"
+  );
+
   const voiceButton = document.getElementById("voiceButton");
   const captureButton = captureForm
     ? captureForm.querySelector('button[type="submit"]')
@@ -117,6 +144,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   registerEvents();
   renderEverything();
   await initializeMicrosoftSignIn();
+  await resumeVoiceSetup();
   await processPendingMicrosoftActions();
 
   function registerEvents() {
@@ -191,6 +219,20 @@ document.addEventListener("DOMContentLoaded", async function () {
       microsoftRoutingModeSelect.addEventListener(
         "change",
         saveMicrosoftRoutingMode
+      );
+    }
+
+    if (startVoiceSetupButton) {
+      startVoiceSetupButton.addEventListener(
+        "click",
+        startVoiceSetup
+      );
+    }
+
+    if (copyVoiceSetupKeyButton) {
+      copyVoiceSetupKeyButton.addEventListener(
+        "click",
+        copyVoiceSetupKey
       );
     }
 
@@ -386,6 +428,8 @@ document.addEventListener("DOMContentLoaded", async function () {
       setMicrosoftMessage(
         "Connected as " + displayName + "."
       );
+
+      updateVoiceSetupDisplay();
       return;
     }
 
@@ -417,6 +461,482 @@ document.addEventListener("DOMContentLoaded", async function () {
     setMicrosoftMessage(
       "Sign in to connect GSD Capture to your Microsoft account."
     );
+
+    updateVoiceSetupDisplay();
+  }
+
+  function loadSavedVoiceSetup() {
+    try {
+      const saved = localStorage.getItem(
+        VOICE_SETUP_CONNECTION_KEY
+      );
+
+      if (!saved) {
+        return null;
+      }
+
+      const parsed = JSON.parse(saved);
+
+      return parsed &&
+        typeof parsed === "object" &&
+        typeof parsed.voiceKey === "string"
+        ? parsed
+        : null;
+    } catch (error) {
+      console.error(
+        "Saved Voice Capture setup could not be read:",
+        error
+      );
+
+      return null;
+    }
+  }
+
+  function updateVoiceSetupDisplay() {
+    if (!voiceSetupCard) {
+      return;
+    }
+
+    const savedSetup = loadSavedVoiceSetup();
+
+    if (savedSetup && savedSetup.voiceKey) {
+      if (voiceSetupBadge) {
+        voiceSetupBadge.textContent = "Connected";
+        voiceSetupBadge.classList.add("connected");
+      }
+
+      if (voiceSetupStatus) {
+        const accountName =
+          savedSetup.displayName ||
+          savedSetup.email ||
+          "your Microsoft account";
+
+        voiceSetupStatus.textContent =
+          "Voice Capture is connected to " +
+          accountName +
+          ".";
+        voiceSetupStatus.classList.remove(
+          "error-message"
+        );
+      }
+
+      if (startVoiceSetupButton) {
+        startVoiceSetupButton.disabled =
+          !microsoftAccount;
+        startVoiceSetupButton.textContent =
+          "Set Up Again";
+      }
+
+      if (voiceSetupResult) {
+        voiceSetupResult.classList.remove("hidden");
+      }
+
+      if (voiceSetupKey) {
+        voiceSetupKey.value = savedSetup.voiceKey;
+      }
+
+      return;
+    }
+
+    if (voiceSetupBadge) {
+      voiceSetupBadge.textContent = "Not set up";
+      voiceSetupBadge.classList.remove("connected");
+    }
+
+    if (voiceSetupResult) {
+      voiceSetupResult.classList.add("hidden");
+    }
+
+    if (voiceSetupKey) {
+      voiceSetupKey.value = "";
+    }
+
+    if (startVoiceSetupButton) {
+      startVoiceSetupButton.disabled =
+        !microsoftAccount;
+      startVoiceSetupButton.textContent =
+        "Set Up Voice Capture";
+    }
+
+    if (voiceSetupStatus) {
+      voiceSetupStatus.classList.remove(
+        "error-message"
+      );
+
+      voiceSetupStatus.textContent =
+        microsoftAccount
+          ? "Connect private background capture for Siri and Apple Shortcuts."
+          : "Connect Microsoft To Do first, then set up private background capture.";
+    }
+  }
+
+  function setVoiceSetupMessage(message, isError) {
+    if (!voiceSetupStatus) {
+      return;
+    }
+
+    voiceSetupStatus.textContent = message;
+    voiceSetupStatus.classList.toggle(
+      "error-message",
+      Boolean(isError)
+    );
+  }
+
+  function setVoiceSetupBusy(isBusy) {
+    if (!startVoiceSetupButton) {
+      return;
+    }
+
+    startVoiceSetupButton.disabled =
+      Boolean(isBusy) || !microsoftAccount;
+
+    if (isBusy) {
+      startVoiceSetupButton.textContent =
+        "Starting setup...";
+      return;
+    }
+
+    startVoiceSetupButton.textContent =
+      loadSavedVoiceSetup()
+        ? "Set Up Again"
+        : "Set Up Voice Capture";
+  }
+
+  async function startVoiceSetup() {
+    if (!navigator.onLine) {
+      setVoiceSetupMessage(
+        "Connect to the internet before setting up Voice Capture.",
+        true
+      );
+      return;
+    }
+
+    if (
+      !microsoftAuthReady ||
+      !microsoftAuth ||
+      !microsoftAccount
+    ) {
+      setVoiceSetupMessage(
+        "Connect your Microsoft account first.",
+        true
+      );
+      return;
+    }
+
+    setVoiceSetupBusy(true);
+    setVoiceSetupMessage(
+      "Verifying your Microsoft account..."
+    );
+
+    try {
+      const accessToken =
+        await acquireMicrosoftAccessToken();
+
+      if (!accessToken) {
+        setVoiceSetupBusy(false);
+        return;
+      }
+
+      const response = await fetch(
+        "/api/voice-setup-start",
+        {
+          method: "POST",
+          headers: {
+            Authorization:
+              "Bearer " + accessToken,
+            "Content-Type":
+              "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({}),
+        }
+      );
+
+      const data = await response
+        .json()
+        .catch(function () {
+          return null;
+        });
+
+      if (
+        !response.ok ||
+        !data ||
+        !data.setupId ||
+        !data.voiceKey ||
+        !data.connectUrl
+      ) {
+        throw new Error(
+          data &&
+            (data.message || data.error)
+            ? data.message || data.error
+            : "Voice Capture setup could not be started."
+        );
+      }
+
+      const pendingSetup = {
+        setupId: data.setupId,
+        voiceKey: data.voiceKey,
+        displayName: data.displayName || "",
+        email: data.email || "",
+        connectUrl: data.connectUrl,
+        expiresAt:
+          Date.now() +
+          Number(data.expiresInSeconds || 900) *
+            1000,
+      };
+
+      sessionStorage.setItem(
+        VOICE_SETUP_PENDING_KEY,
+        JSON.stringify(pendingSetup)
+      );
+
+      setVoiceSetupMessage(
+        "Opening Microsoft to approve background capture..."
+      );
+
+      window.location.assign(data.connectUrl);
+    } catch (error) {
+      console.error(
+        "Voice Capture setup failed to start:",
+        error
+      );
+
+      setVoiceSetupMessage(
+        error && error.message
+          ? error.message
+          : "Voice Capture setup could not be started. Please try again.",
+        true
+      );
+
+      setVoiceSetupBusy(false);
+    }
+  }
+
+  async function resumeVoiceSetup() {
+    updateVoiceSetupDisplay();
+
+    const parameters = new URLSearchParams(
+      window.location.search
+    );
+
+    const returnedSetupId =
+      parameters.get("setupId") || "";
+    const returnedComplete =
+      parameters.get("voiceSetup") === "complete";
+
+    let pendingSetup = null;
+
+    try {
+      const savedPending = sessionStorage.getItem(
+        VOICE_SETUP_PENDING_KEY
+      );
+
+      pendingSetup = savedPending
+        ? JSON.parse(savedPending)
+        : null;
+    } catch (error) {
+      console.error(
+        "Pending Voice Capture setup could not be read:",
+        error
+      );
+    }
+
+    if (!returnedComplete && !pendingSetup) {
+      return;
+    }
+
+    showScreen("settingsScreen");
+
+    navButtons.forEach(function (button) {
+      button.classList.remove("active-nav");
+    });
+
+    if (
+      !pendingSetup ||
+      !pendingSetup.setupId ||
+      !pendingSetup.voiceKey
+    ) {
+      setVoiceSetupMessage(
+        "The private Voice Capture key was not found. Start setup again.",
+        true
+      );
+
+      clearVoiceSetupQuery();
+      return;
+    }
+
+    if (
+      returnedSetupId &&
+      returnedSetupId !== pendingSetup.setupId
+    ) {
+      setVoiceSetupMessage(
+        "The returned Voice Capture setup did not match this device. Start setup again.",
+        true
+      );
+
+      clearVoiceSetupQuery();
+      return;
+    }
+
+    if (
+      pendingSetup.expiresAt &&
+      Date.now() > pendingSetup.expiresAt
+    ) {
+      sessionStorage.removeItem(
+        VOICE_SETUP_PENDING_KEY
+      );
+
+      setVoiceSetupMessage(
+        "Voice Capture setup expired. Start setup again.",
+        true
+      );
+
+      clearVoiceSetupQuery();
+      return;
+    }
+
+    setVoiceSetupBusy(true);
+    setVoiceSetupMessage(
+      "Confirming your Voice Capture connection..."
+    );
+
+    try {
+      const response = await fetch(
+        "/api/voice-setup-status?setup=" +
+          encodeURIComponent(
+            pendingSetup.setupId
+          ),
+        {
+          headers: {
+            Accept: "application/json",
+          },
+          cache: "no-store",
+        }
+      );
+
+      const data = await response
+        .json()
+        .catch(function () {
+          return null;
+        });
+
+      if (!response.ok || !data) {
+        throw new Error(
+          data && data.error
+            ? data.error
+            : "Voice Capture status could not be checked."
+        );
+      }
+
+      if (!data.complete) {
+        if (data.expired) {
+          throw new Error(
+            "Voice Capture setup expired. Start setup again."
+          );
+        }
+
+        setVoiceSetupMessage(
+          "Microsoft approval has not finished yet. Return here after completing it.",
+          true
+        );
+
+        setVoiceSetupBusy(false);
+        return;
+      }
+
+      const completedSetup = {
+        voiceKey: pendingSetup.voiceKey,
+        setupId: pendingSetup.setupId,
+        displayName:
+          data.displayName ||
+          pendingSetup.displayName ||
+          "",
+        email:
+          data.email ||
+          pendingSetup.email ||
+          "",
+        connectedAt:
+          data.connectedAt ||
+          new Date().toISOString(),
+      };
+
+      localStorage.setItem(
+        VOICE_SETUP_CONNECTION_KEY,
+        JSON.stringify(completedSetup)
+      );
+
+      sessionStorage.removeItem(
+        VOICE_SETUP_PENDING_KEY
+      );
+
+      clearVoiceSetupQuery();
+      updateVoiceSetupDisplay();
+
+      setVoiceSetupMessage(
+        "Voice Capture is connected. Copy the private key for the Shortcut installation step."
+      );
+    } catch (error) {
+      console.error(
+        "Voice Capture setup confirmation failed:",
+        error
+      );
+
+      setVoiceSetupMessage(
+        error && error.message
+          ? error.message
+          : "Voice Capture setup could not be confirmed.",
+        true
+      );
+    } finally {
+      setVoiceSetupBusy(false);
+    }
+  }
+
+  function clearVoiceSetupQuery() {
+    const url = new URL(window.location.href);
+
+    url.searchParams.delete("voiceSetup");
+    url.searchParams.delete("setupId");
+
+    window.history.replaceState(
+      {},
+      document.title,
+      url.pathname +
+        url.search +
+        url.hash
+    );
+  }
+
+  async function copyVoiceSetupKey() {
+    const savedSetup = loadSavedVoiceSetup();
+
+    if (!savedSetup || !savedSetup.voiceKey) {
+      setVoiceSetupMessage(
+        "No Voice Capture key is available yet.",
+        true
+      );
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(
+        savedSetup.voiceKey
+      );
+
+      setVoiceSetupMessage(
+        "Voice Capture key copied."
+      );
+    } catch (error) {
+      if (voiceSetupKey) {
+        voiceSetupKey.focus();
+        voiceSetupKey.select();
+      }
+
+      setVoiceSetupMessage(
+        "The key is selected. Choose Copy on your device.",
+        true
+      );
+    }
   }
 
   async function loadMicrosoftTodoLists() {
