@@ -694,3 +694,60 @@ select:focus {
   font-size: 0.82rem;
   line-height: 1.45;
 }
+
+.schedule-suggestion {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(15, 118, 110, 0.22);
+  border-radius: var(--radius-small);
+  background: rgba(15, 118, 110, 0.06);
+}
+
+.schedule-suggestion > strong {
+  font-size: 0.92rem;
+}
+
+.schedule-suggestion > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.schedule-item {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+}
+
+.schedule-item > strong {
+  font-size: 0.88rem;
+}
+
+.schedule-item > p {
+  margin: 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.schedule-status {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.schedule-error {
+  color: var(--danger);
+}
+
+.schedule-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 3px;
+}

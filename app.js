@@ -11,6 +11,8 @@ document.addEventListener("DOMContentLoaded", async function () {
   const MICROSOFT_SCOPES = [
     "User.Read",
     "Tasks.ReadWrite",
+    "Calendars.ReadWrite",
+    "MailboxSettings.Read",
   ];
   const MICROSOFT_REVIEW_LIST_NAME = "GSD Review";
 
@@ -1098,6 +1100,26 @@ document.addEventListener("DOMContentLoaded", async function () {
         typeof item.explanation === "string"
           ? item.explanation
           : "",
+      schedulingExplanation:
+        typeof item.schedulingExplanation === "string"
+          ? item.schedulingExplanation
+          : "",
+      microsoftTimeZone: item.microsoftTimeZone || "",
+      calendarIntent: item.calendarIntent || "none",
+      calendarTitle: item.calendarTitle || "",
+      calendarStartDateTime:
+        item.calendarStartDateTime || "",
+      calendarEndDateTime:
+        item.calendarEndDateTime || "",
+      calendarLocation: item.calendarLocation || "",
+      calendarStatus: item.calendarStatus || "none",
+      calendarEventId: item.calendarEventId || "",
+      calendarWebLink: item.calendarWebLink || "",
+      calendarError: item.calendarError || "",
+      reminderIntent: item.reminderIntent || "none",
+      reminderDateTime: item.reminderDateTime || "",
+      reminderStatus: item.reminderStatus || "none",
+      reminderError: item.reminderError || "",
       priority: item.priority || "Normal",
       dueDate: item.dueDate || "",
       context: item.context || "",
@@ -1172,6 +1194,7 @@ document.addEventListener("DOMContentLoaded", async function () {
           status,
           finalCategory: task.category || "",
           finalListName: finalListName || "",
+          dismissPendingScheduling: true,
         }),
       }
     );
@@ -1191,6 +1214,308 @@ document.addEventListener("DOMContentLoaded", async function () {
     task.serverReviewPending = false;
     task.serverReviewStatus = status;
     return true;
+  }
+
+  function applyServerSchedulingItem(task, item) {
+    if (!task || !item) {
+      return;
+    }
+
+    task.schedulingExplanation =
+      item.schedulingExplanation || task.schedulingExplanation || "";
+    task.microsoftTimeZone =
+      item.microsoftTimeZone || task.microsoftTimeZone || "";
+    task.calendarIntent =
+      item.calendarIntent || task.calendarIntent || "none";
+    task.calendarTitle =
+      item.calendarTitle || task.calendarTitle || "";
+    task.calendarStartDateTime =
+      item.calendarStartDateTime || task.calendarStartDateTime || "";
+    task.calendarEndDateTime =
+      item.calendarEndDateTime || task.calendarEndDateTime || "";
+    task.calendarLocation =
+      item.calendarLocation || task.calendarLocation || "";
+    task.calendarStatus =
+      item.calendarStatus || task.calendarStatus || "none";
+    task.calendarEventId =
+      item.calendarEventId || task.calendarEventId || "";
+    task.calendarWebLink =
+      item.calendarWebLink || task.calendarWebLink || "";
+    task.calendarError =
+      typeof item.calendarError === "string"
+        ? item.calendarError
+        : task.calendarError || "";
+    task.reminderIntent =
+      item.reminderIntent || task.reminderIntent || "none";
+    task.reminderDateTime =
+      item.reminderDateTime || task.reminderDateTime || "";
+    task.reminderStatus =
+      item.reminderStatus || task.reminderStatus || "none";
+    task.reminderError =
+      typeof item.reminderError === "string"
+        ? item.reminderError
+        : task.reminderError || "";
+  }
+
+  async function runServerSchedulingAction(
+    task,
+    action,
+    overrides
+  ) {
+    if (!task || !task.serverReviewId) {
+      throw new Error(
+        "This scheduling action is only available for Voice Capture review items."
+      );
+    }
+
+    const savedSetup = loadSavedVoiceSetup();
+
+    if (!savedSetup || !savedSetup.voiceKey) {
+      throw new Error(
+        "Set up Voice Capture again before using calendar or reminder actions."
+      );
+    }
+
+    const response = await fetch(
+      "/api/voice-review-inbox",
+      {
+        method: "PATCH",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "x-gsd-capture-key": savedSetup.voiceKey,
+        },
+        body: JSON.stringify({
+          reviewId: task.serverReviewId,
+          action,
+          ...(overrides || {}),
+        }),
+      }
+    );
+
+    const data = await response.json().catch(function () {
+      return null;
+    });
+
+    if (!response.ok) {
+      if (data && data.item) {
+        applyServerSchedulingItem(task, data.item);
+        saveTasks();
+        renderEverything();
+      }
+
+      const message =
+        data && data.error
+          ? data.error
+          : "The calendar or reminder action could not be completed.";
+
+      throw new Error(
+        data && data.reconnectRequired
+          ? "Calendar and reminder access needs to be reconnected. Open Settings, connect Microsoft again, and then choose Set Up Voice Capture again."
+          : message
+      );
+    }
+
+    if (data && data.item) {
+      applyServerSchedulingItem(task, data.item);
+    }
+
+    saveTasks();
+    renderEverything();
+    return data || { ok: true };
+  }
+
+  async function createCalendarForTask(task) {
+    const title = window.prompt(
+      "Calendar event title:",
+      task.calendarTitle || task.title || ""
+    );
+
+    if (title === null || !title.trim()) {
+      return;
+    }
+
+    const startValue = window.prompt(
+      "Start date and time (YYYY-MM-DD HH:MM):",
+      formatDateTimeForInput(task.calendarStartDateTime)
+    );
+
+    if (startValue === null) {
+      return;
+    }
+
+    const startDateTime = normalizePromptDateTime(startValue);
+
+    if (!startDateTime) {
+      setServerReviewStatus(
+        "Enter the start as YYYY-MM-DD HH:MM.",
+        true
+      );
+      return;
+    }
+
+    const suggestedEnd =
+      task.calendarEndDateTime ||
+      addMinutesToLocalDateTime(startDateTime, 30);
+    const endValue = window.prompt(
+      "End date and time (YYYY-MM-DD HH:MM):",
+      formatDateTimeForInput(suggestedEnd)
+    );
+
+    if (endValue === null) {
+      return;
+    }
+
+    const endDateTime = normalizePromptDateTime(endValue);
+
+    if (!endDateTime) {
+      setServerReviewStatus(
+        "Enter the end as YYYY-MM-DD HH:MM.",
+        true
+      );
+      return;
+    }
+
+    const location = window.prompt(
+      "Location (optional):",
+      task.calendarLocation || ""
+    );
+
+    setServerReviewStatus("Creating calendar event...");
+
+    try {
+      const result = await runServerSchedulingAction(
+        task,
+        "create-calendar",
+        {
+          calendarTitle: title.trim(),
+          calendarStartDateTime: startDateTime,
+          calendarEndDateTime: endDateTime,
+          calendarLocation:
+            location === null ? task.calendarLocation || "" : location.trim(),
+        }
+      );
+
+      setServerReviewStatus(
+        result.message || "Calendar event created."
+      );
+    } catch (error) {
+      setServerReviewStatus(
+        error && error.message
+          ? error.message
+          : "The calendar event could not be created.",
+        true
+      );
+    }
+  }
+
+  async function setReminderForTask(task) {
+    const reminderValue = window.prompt(
+      "Reminder date and time (YYYY-MM-DD HH:MM):",
+      formatDateTimeForInput(task.reminderDateTime)
+    );
+
+    if (reminderValue === null) {
+      return;
+    }
+
+    const reminderDateTime =
+      normalizePromptDateTime(reminderValue);
+
+    if (!reminderDateTime) {
+      setServerReviewStatus(
+        "Enter the reminder as YYYY-MM-DD HH:MM.",
+        true
+      );
+      return;
+    }
+
+    setServerReviewStatus("Setting Microsoft To Do reminder...");
+
+    try {
+      const result = await runServerSchedulingAction(
+        task,
+        "set-reminder",
+        { reminderDateTime }
+      );
+
+      setServerReviewStatus(
+        result.message || "Reminder set in Microsoft To Do."
+      );
+    } catch (error) {
+      setServerReviewStatus(
+        error && error.message
+          ? error.message
+          : "The reminder could not be set.",
+        true
+      );
+    }
+  }
+
+  async function dismissSchedulingSuggestion(task, type) {
+    const label = type === "calendar" ? "calendar" : "reminder";
+
+    if (!window.confirm("Dismiss this " + label + " suggestion?")) {
+      return;
+    }
+
+    try {
+      await runServerSchedulingAction(
+        task,
+        "dismiss-" + label
+      );
+      setServerReviewStatus(
+        (label === "calendar" ? "Calendar" : "Reminder") +
+          " suggestion dismissed."
+      );
+    } catch (error) {
+      setServerReviewStatus(
+        error && error.message
+          ? error.message
+          : "The suggestion could not be dismissed.",
+        true
+      );
+    }
+  }
+
+  function normalizePromptDateTime(value) {
+    const text = String(value || "")
+      .trim()
+      .replace(" ", "T");
+    const match = text.match(
+      /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2}))?$/
+    );
+
+    if (!match) {
+      return "";
+    }
+
+    const normalized =
+      match[1] + "T" + match[2] + ":" + (match[3] || "00");
+    const testDate = new Date(normalized + "Z");
+
+    return Number.isNaN(testDate.getTime())
+      ? ""
+      : normalized;
+  }
+
+  function formatDateTimeForInput(value) {
+    const normalized = normalizePromptDateTime(value);
+    return normalized
+      ? normalized.slice(0, 16).replace("T", " ")
+      : "";
+  }
+
+  function addMinutesToLocalDateTime(value, minutes) {
+    const normalized = normalizePromptDateTime(value);
+
+    if (!normalized) {
+      return "";
+    }
+
+    const date = new Date(normalized + "Z");
+    date.setUTCMinutes(date.getUTCMinutes() + minutes);
+    return date.toISOString().slice(0, 19);
   }
 
   async function keepTaskInGsdReview(task) {
@@ -2049,7 +2374,18 @@ document.addEventListener("DOMContentLoaded", async function () {
     if (task.dueDate) {
       payload.dueDateTime = {
         dateTime: task.dueDate + "T12:00:00",
-        timeZone: "UTC",
+        timeZone: task.microsoftTimeZone || "UTC",
+      };
+    }
+
+    if (
+      task.reminderStatus === "set" &&
+      task.reminderDateTime
+    ) {
+      payload.isReminderOn = true;
+      payload.reminderDateTime = {
+        dateTime: task.reminderDateTime,
+        timeZone: task.microsoftTimeZone || "UTC",
       };
     }
 
@@ -3311,6 +3647,9 @@ document.addEventListener("DOMContentLoaded", async function () {
         }
       }
 
+      const schedulingPanel =
+        createSchedulingPanel(task, location);
+
       const meta = document.createElement("div");
       meta.className = "task-meta";
 
@@ -3460,11 +3799,223 @@ document.addEventListener("DOMContentLoaded", async function () {
         card.appendChild(suggestionPanel);
       }
 
+      if (schedulingPanel) {
+        card.appendChild(schedulingPanel);
+      }
+
       card.appendChild(meta);
       card.appendChild(actions);
 
       listElement.appendChild(card);
     });
+  }
+
+  function createSchedulingPanel(task, location) {
+    if (location !== "review" || !task.serverReviewId) {
+      return null;
+    }
+
+    const calendarStatus = task.calendarStatus || "none";
+    const reminderStatus = task.reminderStatus || "none";
+    const hasCalendar =
+      (task.calendarIntent && task.calendarIntent !== "none") ||
+      calendarStatus !== "none";
+    const hasReminder =
+      (task.reminderIntent && task.reminderIntent !== "none") ||
+      reminderStatus !== "none";
+
+    if (!hasCalendar && !hasReminder) {
+      return null;
+    }
+
+    const panel = document.createElement("section");
+    panel.className = "schedule-suggestion";
+
+    const heading = document.createElement("strong");
+    heading.textContent = "Calendar & reminders";
+    panel.appendChild(heading);
+
+    if (task.schedulingExplanation) {
+      const explanation = document.createElement("p");
+      explanation.textContent = task.schedulingExplanation;
+      panel.appendChild(explanation);
+    }
+
+    if (hasCalendar) {
+      const calendarItem = document.createElement("div");
+      calendarItem.className = "schedule-item";
+
+      const calendarHeading = document.createElement("strong");
+      calendarHeading.textContent = "📅 Calendar";
+      calendarItem.appendChild(calendarHeading);
+
+      const calendarDetails = document.createElement("p");
+      calendarDetails.textContent =
+        (task.calendarTitle || task.title || "Calendar event") +
+        (task.calendarStartDateTime
+          ? " — " + formatScheduleDateTime(task.calendarStartDateTime)
+          : " — date and time needed") +
+        (task.calendarLocation
+          ? " — " + task.calendarLocation
+          : "");
+      calendarItem.appendChild(calendarDetails);
+
+      const calendarStatusText = document.createElement("span");
+      calendarStatusText.className = "schedule-status";
+      calendarStatusText.textContent =
+        getCalendarStatusLabel(calendarStatus);
+      calendarItem.appendChild(calendarStatusText);
+
+      if (task.calendarError) {
+        const calendarError = document.createElement("p");
+        calendarError.className = "schedule-error";
+        calendarError.textContent = task.calendarError;
+        calendarItem.appendChild(calendarError);
+      }
+
+      const calendarActions = document.createElement("div");
+      calendarActions.className = "schedule-actions";
+
+      if (calendarStatus === "created") {
+        if (task.calendarWebLink) {
+          calendarActions.appendChild(
+            createButton("Open Event", "", function () {
+              window.open(
+                task.calendarWebLink,
+                "_blank",
+                "noopener,noreferrer"
+              );
+            })
+          );
+        }
+      } else if (calendarStatus !== "dismissed") {
+        calendarActions.appendChild(
+          createButton("Add to Calendar", "", function () {
+            createCalendarForTask(task);
+          })
+        );
+        calendarActions.appendChild(
+          createButton("Dismiss Calendar", "", function () {
+            dismissSchedulingSuggestion(task, "calendar");
+          })
+        );
+      }
+
+      if (calendarActions.childNodes.length > 0) {
+        calendarItem.appendChild(calendarActions);
+      }
+
+      panel.appendChild(calendarItem);
+    }
+
+    if (hasReminder) {
+      const reminderItem = document.createElement("div");
+      reminderItem.className = "schedule-item";
+
+      const reminderHeading = document.createElement("strong");
+      reminderHeading.textContent = "🔔 Reminder";
+      reminderItem.appendChild(reminderHeading);
+
+      const reminderDetails = document.createElement("p");
+      reminderDetails.textContent = task.reminderDateTime
+        ? formatScheduleDateTime(task.reminderDateTime)
+        : "Date and time needed";
+      reminderItem.appendChild(reminderDetails);
+
+      const reminderStatusText = document.createElement("span");
+      reminderStatusText.className = "schedule-status";
+      reminderStatusText.textContent =
+        getReminderStatusLabel(reminderStatus);
+      reminderItem.appendChild(reminderStatusText);
+
+      if (task.reminderError) {
+        const reminderError = document.createElement("p");
+        reminderError.className = "schedule-error";
+        reminderError.textContent = task.reminderError;
+        reminderItem.appendChild(reminderError);
+      }
+
+      const reminderActions = document.createElement("div");
+      reminderActions.className = "schedule-actions";
+
+      if (reminderStatus !== "set" && reminderStatus !== "dismissed") {
+        reminderActions.appendChild(
+          createButton("Set Reminder", "", function () {
+            setReminderForTask(task);
+          })
+        );
+        reminderActions.appendChild(
+          createButton("Dismiss Reminder", "", function () {
+            dismissSchedulingSuggestion(task, "reminder");
+          })
+        );
+      }
+
+      if (reminderActions.childNodes.length > 0) {
+        reminderItem.appendChild(reminderActions);
+      }
+
+      panel.appendChild(reminderItem);
+    }
+
+    return panel;
+  }
+
+  function formatScheduleDateTime(value) {
+    const normalized = normalizePromptDateTime(value);
+
+    if (!normalized) {
+      return "Date and time needed";
+    }
+
+    const parts = normalized.split("T");
+    const dateParts = parts[0].split("-");
+    const timeParts = parts[1].split(":");
+    const hour = Number(timeParts[0]);
+    const minute = timeParts[1];
+    const displayHour = hour % 12 || 12;
+    const period = hour >= 12 ? "PM" : "AM";
+
+    return (
+      Number(dateParts[1]) +
+      "/" +
+      Number(dateParts[2]) +
+      "/" +
+      dateParts[0] +
+      " at " +
+      displayHour +
+      ":" +
+      minute +
+      " " +
+      period
+    );
+  }
+
+  function getCalendarStatusLabel(status) {
+    const labels = {
+      created: "Created in Microsoft Calendar",
+      suggested: "AI suggestion — approval needed",
+      "needs-details": "Details needed",
+      "needs-reconnect": "Reconnect calendar access",
+      failed: "Calendar action needs attention",
+      dismissed: "Suggestion dismissed",
+      ready: "Ready to create",
+    };
+
+    return labels[status] || "Calendar review pending";
+  }
+
+  function getReminderStatusLabel(status) {
+    const labels = {
+      set: "Set in Microsoft To Do",
+      suggested: "AI suggestion — approval needed",
+      "needs-details": "Details needed",
+      "needs-reconnect": "Reconnect reminder access",
+      failed: "Reminder action needs attention",
+      dismissed: "Suggestion dismissed",
+    };
+
+    return labels[status] || "Reminder review pending";
   }
 
   function getMicrosoftSyncLabel(task) {

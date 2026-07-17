@@ -20,6 +20,8 @@ const MICROSOFT_SCOPES = [
   "offline_access",
   "User.Read",
   "Tasks.ReadWrite",
+  "Calendars.ReadWrite",
+  "MailboxSettings.Read",
 ];
 
 export default async function handler(request, response) {
@@ -117,6 +119,25 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
     const classification = await classifyTask(text, currentDate);
     const accessToken = tokenResult.access_token;
     const reviewId = createVoiceReviewId();
+
+    let microsoftTimeZone = "";
+    let schedulingConnectionError = "";
+
+    if (hasSchedulingIntent(classification)) {
+      try {
+        microsoftTimeZone = await readMicrosoftTimeZone(accessToken);
+      } catch (timeZoneError) {
+        schedulingConnectionError =
+          timeZoneError && timeZoneError.message
+            ? timeZoneError.message
+            : "Calendar and reminder access needs to be reconnected.";
+      }
+    }
+
+    const reminderStatus = getInitialReminderStatus(
+      classification,
+      microsoftTimeZone
+    );
     const destinationList = await resolveDestinationList(
       classification,
       accessToken
@@ -125,13 +146,42 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
       text,
       classification,
       requestId,
-      reviewId
+      reviewId,
+      microsoftTimeZone,
+      reminderStatus
     );
     const microsoftTask = await createMicrosoftTask(
       destinationList.id,
       taskPayload,
       accessToken
     );
+
+    let calendarStatus = getInitialCalendarStatus(
+      classification,
+      microsoftTimeZone
+    );
+    let calendarEvent = null;
+    let calendarError = "";
+
+    if (calendarStatus === "ready") {
+      try {
+        calendarEvent = await createMicrosoftCalendarEvent(
+          classification,
+          microsoftTimeZone,
+          reviewId,
+          text,
+          accessToken
+        );
+        calendarStatus = "created";
+      } catch (calendarCreateError) {
+        calendarStatus = "failed";
+        calendarError =
+          calendarCreateError && calendarCreateError.message
+            ? calendarCreateError.message
+            : "The calendar event could not be created.";
+      }
+    }
+
     const createdAt = new Date().toISOString();
 
     const reviewItem = {
@@ -150,6 +200,29 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
       confidence: classification.confidence,
       explanation: classification.explanation,
       sortingMethod: classification.sortingMethod,
+      schedulingExplanation: classification.schedulingExplanation,
+      calendarIntent: classification.calendarIntent,
+      calendarTitle: classification.calendarTitle,
+      calendarStartDateTime: classification.calendarStartDateTime,
+      calendarEndDateTime: classification.calendarEndDateTime,
+      calendarLocation: classification.calendarLocation,
+      calendarStatus,
+      calendarEventId: calendarEvent && calendarEvent.id
+        ? calendarEvent.id
+        : "",
+      calendarWebLink: calendarEvent && calendarEvent.webLink
+        ? calendarEvent.webLink
+        : "",
+      calendarError,
+      reminderIntent: classification.reminderIntent,
+      reminderDateTime: classification.reminderDateTime,
+      reminderStatus,
+      reminderError:
+        reminderStatus === "needs-reconnect"
+          ? schedulingConnectionError
+          : "",
+      microsoftTimeZone,
+      schedulingConnectionError,
       needsReview: true,
       requestId: requestId || "",
       createdAt,
@@ -164,6 +237,28 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
       reviewItem
     );
 
+    const messageParts = [
+      "Captured and added to GSD Review for review."
+    ];
+
+    if (calendarStatus === "created") {
+      messageParts.push("Calendar event created.");
+    } else if (calendarStatus === "needs-details") {
+      messageParts.push("Calendar details need review in GSD Capture.");
+    } else if (calendarStatus === "needs-reconnect") {
+      messageParts.push("Reconnect Voice Capture to enable calendar access.");
+    } else if (calendarStatus === "failed") {
+      messageParts.push("The calendar event needs attention in GSD Capture.");
+    }
+
+    if (reminderStatus === "set") {
+      messageParts.push("Reminder set.");
+    } else if (reminderStatus === "needs-details") {
+      messageParts.push("Reminder details need review in GSD Capture.");
+    } else if (reminderStatus === "needs-reconnect") {
+      messageParts.push("Reconnect Voice Capture to enable reminders.");
+    }
+
     const result = {
       ok: true,
       reviewId,
@@ -175,11 +270,15 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
       priority: classification.priority,
       dueDate: classification.dueDate,
       needsReview: true,
+      calendarIntent: classification.calendarIntent,
+      calendarStatus,
+      calendarEventId: reviewItem.calendarEventId,
+      reminderIntent: classification.reminderIntent,
+      reminderStatus,
       listName:
         destinationList.displayName || MICROSOFT_REVIEW_LIST_NAME,
       microsoftTaskId: microsoftTask.id,
-      message:
-        "Captured and added to GSD Review for review.",
+      message: messageParts.join(" "),
     };
 
     if (requestId) {
@@ -204,7 +303,10 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
     const reconnectRequired =
       lowerTechnicalMessage.includes("reconnect") ||
       lowerTechnicalMessage.includes("refresh token") ||
-      lowerTechnicalMessage.includes("not connected");
+      lowerTechnicalMessage.includes("not connected") ||
+      lowerTechnicalMessage.includes("interaction_required") ||
+      lowerTechnicalMessage.includes("consent") ||
+      lowerTechnicalMessage.includes("insufficient privileges");
 
     return response.status(reconnectRequired ? 409 : 500).json({
       error: technicalMessage,
@@ -488,7 +590,8 @@ async function classifyTask(text, currentDate) {
                   currentDate +
                   ". Convert clear relative dates such as today or tomorrow into YYYY-MM-DD. " +
                   "Use null when a date, project, or duration cannot reasonably be determined. " +
-                  "Also return a confidence score from 0 to 100 for the suggested category and a short explanation a user can review.",
+                  "Also return a confidence score from 0 to 100 for the suggested category and a short explanation a user can review. " +
+                  "Detect calendar and reminder intent carefully. Use calendarIntent explicit only when the user directly asks to add, create, book, schedule, or put something on a calendar. Use suggested when a calendar event would clearly help but the user did not directly ask for one. Use reminderIntent explicit only when the user directly asks to be reminded, alerted, or notified. Use suggested when a reminder would clearly help but was not directly requested. Use none otherwise. Never invent a date or time. Return local date-times as YYYY-MM-DDTHH:mm:ss without an offset. When a calendar start is known but no end is stated, use a reasonable 30-minute end time. Use null for missing scheduling details.",
               },
             ],
           },
@@ -546,6 +649,20 @@ async function classifyTask(text, currentDate) {
                   maximum: 100,
                 },
                 explanation: { type: "string" },
+                calendarIntent: {
+                  type: "string",
+                  enum: ["none", "explicit", "suggested"],
+                },
+                calendarTitle: { type: ["string", "null"] },
+                calendarStartDateTime: { type: ["string", "null"] },
+                calendarEndDateTime: { type: ["string", "null"] },
+                calendarLocation: { type: ["string", "null"] },
+                reminderIntent: {
+                  type: "string",
+                  enum: ["none", "explicit", "suggested"],
+                },
+                reminderDateTime: { type: ["string", "null"] },
+                schedulingExplanation: { type: "string" },
               },
               required: [
                 "summary",
@@ -558,6 +675,14 @@ async function classifyTask(text, currentDate) {
                 "needsReview",
                 "confidence",
                 "explanation",
+                "calendarIntent",
+                "calendarTitle",
+                "calendarStartDateTime",
+                "calendarEndDateTime",
+                "calendarLocation",
+                "reminderIntent",
+                "reminderDateTime",
+                "schedulingExplanation",
               ],
               additionalProperties: false,
             },
@@ -655,6 +780,25 @@ function normalizeClassification(value, originalText) {
       value.explanation.trim()
         ? value.explanation.trim().slice(0, 300)
         : "AI suggested this folder from the words in the capture.",
+    calendarIntent: normalizeSchedulingIntent(value.calendarIntent),
+    calendarTitle: normalizeOptionalText(value.calendarTitle, 300),
+    calendarStartDateTime: normalizeLocalDateTime(
+      value.calendarStartDateTime
+    ),
+    calendarEndDateTime: normalizeLocalDateTime(
+      value.calendarEndDateTime
+    ),
+    calendarLocation: normalizeOptionalText(
+      value.calendarLocation,
+      300
+    ),
+    reminderIntent: normalizeSchedulingIntent(value.reminderIntent),
+    reminderDateTime: normalizeLocalDateTime(value.reminderDateTime),
+    schedulingExplanation:
+      typeof value.schedulingExplanation === "string" &&
+      value.schedulingExplanation.trim()
+        ? value.schedulingExplanation.trim().slice(0, 400)
+        : "No additional scheduling suggestion was made.",
     sortingMethod: "ai",
   };
 }
@@ -712,8 +856,147 @@ function localFallbackClassification(text, currentDate) {
     confidence: 35,
     explanation:
       "Local fallback suggested this folder because AI sorting was unavailable.",
+    calendarIntent: detectLocalCalendarIntent(lowerText),
+    calendarTitle: null,
+    calendarStartDateTime: null,
+    calendarEndDateTime: null,
+    calendarLocation: null,
+    reminderIntent: detectLocalReminderIntent(lowerText),
+    reminderDateTime: null,
+    schedulingExplanation:
+      "Scheduling details need review because AI scheduling was unavailable.",
     sortingMethod: "local",
   };
+}
+
+function normalizeSchedulingIntent(value) {
+  return ["none", "explicit", "suggested"].includes(value)
+    ? value
+    : "none";
+}
+
+function normalizeOptionalText(value, maximumLength) {
+  return typeof value === "string" && value.trim()
+    ? value.trim().slice(0, maximumLength)
+    : null;
+}
+
+function normalizeLocalDateTime(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  const match = trimmed.match(
+    /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2}))?$/
+  );
+
+  if (!match) {
+    return null;
+  }
+
+  const normalized =
+    match[1] + "T" + match[2] + ":" + (match[3] || "00");
+  const testDate = new Date(normalized + "Z");
+
+  return Number.isNaN(testDate.getTime())
+    ? null
+    : normalized;
+}
+
+function detectLocalCalendarIntent(lowerText) {
+  return /(add|put|create|book|schedule).{0,40}(calendar|appointment|meeting)|(calendar).{0,40}(add|put|create|book|schedule)/.test(
+    lowerText
+  )
+    ? "explicit"
+    : "none";
+}
+
+function detectLocalReminderIntent(lowerText) {
+  return /\bremind me\b|\bset (a |an )?reminder\b|\balert me\b|\bnotify me\b/.test(
+    lowerText
+  )
+    ? "explicit"
+    : "none";
+}
+
+function hasSchedulingIntent(classification) {
+  return (
+    classification.calendarIntent !== "none" ||
+    classification.reminderIntent !== "none"
+  );
+}
+
+function getInitialCalendarStatus(classification, microsoftTimeZone) {
+  if (classification.calendarIntent === "none") {
+    return "none";
+  }
+
+  if (classification.calendarIntent === "suggested") {
+    return "suggested";
+  }
+
+  if (
+    !classification.calendarStartDateTime ||
+    !classification.calendarEndDateTime
+  ) {
+    return "needs-details";
+  }
+
+  return microsoftTimeZone
+    ? "ready"
+    : "needs-reconnect";
+}
+
+function getInitialReminderStatus(classification, microsoftTimeZone) {
+  if (classification.reminderIntent === "none") {
+    return "none";
+  }
+
+  if (classification.reminderIntent === "suggested") {
+    return "suggested";
+  }
+
+  if (!classification.reminderDateTime) {
+    return "needs-details";
+  }
+
+  return microsoftTimeZone
+    ? "set"
+    : "needs-reconnect";
+}
+
+async function readMicrosoftTimeZone(accessToken) {
+  const graphResponse = await fetch(
+    "https://graph.microsoft.com/v1.0/me/mailboxSettings?$select=timeZone",
+    {
+      headers: {
+        Authorization: "Bearer " + accessToken,
+        Accept: "application/json",
+      },
+    }
+  );
+
+  const data = await graphResponse.json().catch(function () {
+    return null;
+  });
+
+  if (!graphResponse.ok) {
+    throw new Error(readGraphError(data, graphResponse.status));
+  }
+
+  const timeZone =
+    data && typeof data.timeZone === "string"
+      ? data.timeZone.trim()
+      : "";
+
+  if (!timeZone) {
+    throw new Error(
+      "Microsoft did not return a calendar time zone. Open Outlook calendar settings and choose a time zone."
+    );
+  }
+
+  return timeZone.slice(0, 100);
 }
 
 async function resolveDestinationList(classification, accessToken) {
@@ -794,7 +1077,14 @@ async function createMicrosoftTodoList(displayName, accessToken) {
   return data;
 }
 
-function buildMicrosoftTaskPayload(originalText, classification, requestId, reviewId) {
+function buildMicrosoftTaskPayload(
+  originalText,
+  classification,
+  requestId,
+  reviewId,
+  microsoftTimeZone,
+  reminderStatus
+) {
   const notes = [];
 
   if (originalText !== classification.summary) {
@@ -829,6 +1119,32 @@ function buildMicrosoftTaskPayload(originalText, classification, requestId, revi
   );
   notes.push("Captured through: Siri Shortcut");
 
+  if (classification.calendarIntent !== "none") {
+    notes.push(
+      "Calendar: " +
+        classification.calendarIntent +
+        (classification.calendarStartDateTime
+          ? " at " + classification.calendarStartDateTime
+          : " — details needed")
+    );
+  }
+
+  if (classification.reminderIntent !== "none") {
+    notes.push(
+      "Reminder: " +
+        classification.reminderIntent +
+        (classification.reminderDateTime
+          ? " at " + classification.reminderDateTime
+          : " — details needed")
+    );
+  }
+
+  if (classification.schedulingExplanation) {
+    notes.push(
+      "Scheduling note: " + classification.schedulingExplanation
+    );
+  }
+
   if (reviewId) {
     notes.push("GSD Voice Review ID: " + reviewId);
   }
@@ -849,11 +1165,85 @@ function buildMicrosoftTaskPayload(originalText, classification, requestId, revi
   if (classification.dueDate) {
     payload.dueDateTime = {
       dateTime: classification.dueDate + "T12:00:00",
-      timeZone: "UTC",
+      timeZone: microsoftTimeZone || "UTC",
+    };
+  }
+
+  if (
+    reminderStatus === "set" &&
+    classification.reminderDateTime &&
+    microsoftTimeZone
+  ) {
+    payload.isReminderOn = true;
+    payload.reminderDateTime = {
+      dateTime: classification.reminderDateTime,
+      timeZone: microsoftTimeZone,
     };
   }
 
   return payload;
+}
+
+async function createMicrosoftCalendarEvent(
+  classification,
+  microsoftTimeZone,
+  reviewId,
+  originalText,
+  accessToken
+) {
+  const payload = {
+    subject:
+      classification.calendarTitle ||
+      classification.summary ||
+      originalText,
+    body: {
+      contentType: "text",
+      content:
+        "Created by GSD Capture from voice input.\n\n" +
+        "Original capture: " +
+        originalText +
+        "\nGSD Voice Review ID: " +
+        reviewId,
+    },
+    start: {
+      dateTime: classification.calendarStartDateTime,
+      timeZone: microsoftTimeZone,
+    },
+    end: {
+      dateTime: classification.calendarEndDateTime,
+      timeZone: microsoftTimeZone,
+    },
+    transactionId: reviewId,
+  };
+
+  if (classification.calendarLocation) {
+    payload.location = {
+      displayName: classification.calendarLocation,
+    };
+  }
+
+  const graphResponse = await fetch(
+    "https://graph.microsoft.com/v1.0/me/events",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + accessToken,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  const data = await graphResponse.json().catch(function () {
+    return null;
+  });
+
+  if (!graphResponse.ok || !data || !data.id) {
+    throw new Error(readGraphError(data, graphResponse.status));
+  }
+
+  return data;
 }
 
 function getMicrosoftImportance(priority) {
