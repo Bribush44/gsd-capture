@@ -2,9 +2,16 @@
 
 import { createHash, timingSafeEqual } from "node:crypto";
 
+import {
+  createVoiceReviewId,
+  getVoiceReviewIndexKey,
+  getVoiceReviewItemKey,
+} from "../lib/voice-user-store.js";
+
 const CONNECTION_KEY = "gsd:siri:microsoft:connection"; const USER_CONNECTION_PREFIX = "gsd:siri:user:";
 const REQUEST_PREFIX = "gsd:siri:request:";
 const RATE_PREFIX = "gsd:siri:rate:";
+const REVIEW_ITEM_TTL_SECONDS = 15552000;
 const MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/common";
 const MICROSOFT_REVIEW_LIST_NAME = "GSD Review";
 const MICROSOFT_SCOPES = [
@@ -109,6 +116,7 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
 
     const classification = await classifyTask(text, currentDate);
     const accessToken = tokenResult.access_token;
+    const reviewId = createVoiceReviewId();
     const destinationList = await resolveDestinationList(
       classification,
       accessToken
@@ -116,26 +124,62 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
     const taskPayload = buildMicrosoftTaskPayload(
       text,
       classification,
-      requestId
+      requestId,
+      reviewId
     );
     const microsoftTask = await createMicrosoftTask(
       destinationList.id,
       taskPayload,
       accessToken
     );
+    const createdAt = new Date().toISOString();
 
-    const result = {
-      ok: true,
-      summary: classification.summary,
+    const reviewItem = {
+      id: reviewId,
+      source: "voice",
+      status: "pending",
+      originalText: text,
+      title: classification.summary,
+      suggestedCategory: classification.category,
       category: classification.category,
       priority: classification.priority,
       dueDate: classification.dueDate,
-      needsReview: classification.needsReview,
-      listName: destinationList.displayName,
+      context: classification.context,
+      project: classification.project,
+      estimatedMinutes: classification.estimatedMinutes,
+      confidence: classification.confidence,
+      explanation: classification.explanation,
+      sortingMethod: classification.sortingMethod,
+      needsReview: true,
+      requestId: requestId || "",
+      createdAt,
       microsoftTaskId: microsoftTask.id,
-      message: classification.needsReview
-        ? "Captured and added to GSD Review for review."
-        : "Captured and added to " + destinationList.displayName + ".",
+      microsoftReviewListId: destinationList.id,
+      microsoftReviewListName:
+        destinationList.displayName || MICROSOFT_REVIEW_LIST_NAME,
+    };
+
+    await saveVoiceReviewItem(
+      captureIdentity,
+      reviewItem
+    );
+
+    const result = {
+      ok: true,
+      reviewId,
+      summary: classification.summary,
+      category: classification.category,
+      suggestedCategory: classification.category,
+      confidence: classification.confidence,
+      explanation: classification.explanation,
+      priority: classification.priority,
+      dueDate: classification.dueDate,
+      needsReview: true,
+      listName:
+        destinationList.displayName || MICROSOFT_REVIEW_LIST_NAME,
+      microsoftTaskId: microsoftTask.id,
+      message:
+        "Captured and added to GSD Review for review.",
     };
 
     if (requestId) {
@@ -220,6 +264,7 @@ async function resolveCaptureIdentity(
   ) {
     return {
       id: "legacy",
+      voiceKeyHash: "legacy",
       connectionKey: CONNECTION_KEY,
       connection: null,
     };
@@ -259,6 +304,7 @@ async function resolveCaptureIdentity(
   try {
     return {
       id: voiceKeyHash.slice(0, 24),
+      voiceKeyHash,
       connectionKey,
       connection:
         JSON.parse(storedConnection),
@@ -428,7 +474,7 @@ async function classifyTask(text, currentDate) {
         model: "gpt-5.6-luna",
         store: false,
         reasoning: { effort: "none" },
-        max_output_tokens: 400,
+        max_output_tokens: 550,
         input: [
           {
             role: "system",
@@ -441,7 +487,8 @@ async function classifyTask(text, currentDate) {
                   "Today's date is " +
                   currentDate +
                   ". Convert clear relative dates such as today or tomorrow into YYYY-MM-DD. " +
-                  "Use null when a date, project, or duration cannot reasonably be determined.",
+                  "Use null when a date, project, or duration cannot reasonably be determined. " +
+                  "Also return a confidence score from 0 to 100 for the suggested category and a short explanation a user can review.",
               },
             ],
           },
@@ -493,6 +540,12 @@ async function classifyTask(text, currentDate) {
                   maximum: 480,
                 },
                 needsReview: { type: "boolean" },
+                confidence: {
+                  type: "integer",
+                  minimum: 0,
+                  maximum: 100,
+                },
+                explanation: { type: "string" },
               },
               required: [
                 "summary",
@@ -503,6 +556,8 @@ async function classifyTask(text, currentDate) {
                 "project",
                 "estimatedMinutes",
                 "needsReview",
+                "confidence",
+                "explanation",
               ],
               additionalProperties: false,
             },
@@ -588,7 +643,18 @@ function normalizeClassification(value, originalText) {
       value.estimatedMinutes <= 480
         ? value.estimatedMinutes
         : null,
-    needsReview: Boolean(value.needsReview),
+    needsReview: true,
+    confidence:
+      Number.isInteger(value.confidence) &&
+      value.confidence >= 0 &&
+      value.confidence <= 100
+        ? value.confidence
+        : 50,
+    explanation:
+      typeof value.explanation === "string" &&
+      value.explanation.trim()
+        ? value.explanation.trim().slice(0, 300)
+        : "AI suggested this folder from the words in the capture.",
     sortingMethod: "ai",
   };
 }
@@ -643,32 +709,29 @@ function localFallbackClassification(text, currentDate) {
     project: null,
     estimatedMinutes: null,
     needsReview: true,
+    confidence: 35,
+    explanation:
+      "Local fallback suggested this folder because AI sorting was unavailable.",
     sortingMethod: "local",
   };
 }
 
 async function resolveDestinationList(classification, accessToken) {
   const lists = await listMicrosoftTodoLists(accessToken);
-  const desiredName = classification.needsReview
-    ? MICROSOFT_REVIEW_LIST_NAME
-    : classification.category === "General"
-      ? "Tasks"
-      : classification.category;
-
+  const desiredName = MICROSOFT_REVIEW_LIST_NAME;
   let matchingList = findListByName(lists, desiredName);
 
-  if (!matchingList && desiredName === "Tasks") {
-    matchingList = lists.find(function (list) {
-      return list.wellknownListName === "defaultList";
-    });
-  }
-
-  if (!matchingList && desiredName !== "Tasks") {
-    matchingList = await createMicrosoftTodoList(desiredName, accessToken);
+  if (!matchingList) {
+    matchingList = await createMicrosoftTodoList(
+      desiredName,
+      accessToken
+    );
   }
 
   if (!matchingList) {
-    throw new Error("The Microsoft To Do destination list could not be found.");
+    throw new Error(
+      "The Microsoft To Do GSD Review list could not be found."
+    );
   }
 
   return matchingList;
@@ -731,19 +794,18 @@ async function createMicrosoftTodoList(displayName, accessToken) {
   return data;
 }
 
-function buildMicrosoftTaskPayload(originalText, classification, requestId) {
+function buildMicrosoftTaskPayload(originalText, classification, requestId, reviewId) {
   const notes = [];
 
   if (originalText !== classification.summary) {
     notes.push("Original capture: " + originalText);
   }
 
-  notes.push("Category: " + classification.category);
+  notes.push("Suggested category: " + classification.category);
+  notes.push("AI confidence: " + classification.confidence + "%");
+  notes.push("Suggestion reason: " + classification.explanation);
   notes.push("Priority: " + classification.priority);
-
-  if (classification.needsReview) {
-    notes.push("Review status: Needs review in GSD Capture");
-  }
+  notes.push("Review status: Awaiting approval in GSD Capture");
 
   if (classification.context) {
     notes.push("Context: " + classification.context);
@@ -766,6 +828,10 @@ function buildMicrosoftTaskPayload(originalText, classification, requestId) {
         : "GSD Capture local fallback")
   );
   notes.push("Captured through: Siri Shortcut");
+
+  if (reviewId) {
+    notes.push("GSD Voice Review ID: " + reviewId);
+  }
 
   if (requestId) {
     notes.push("GSD Siri Request ID: " + requestId);
@@ -800,6 +866,50 @@ function getMicrosoftImportance(priority) {
   }
 
   return "normal";
+}
+
+async function saveVoiceReviewItem(
+  captureIdentity,
+  reviewItem
+) {
+  const voiceKeyHash =
+    captureIdentity.voiceKeyHash ||
+    captureIdentity.id;
+  const itemKey = getVoiceReviewItemKey(
+    voiceKeyHash,
+    reviewItem.id
+  );
+  const indexKey = getVoiceReviewIndexKey(
+    voiceKeyHash
+  );
+  const createdScore = Date.parse(
+    reviewItem.createdAt
+  );
+
+  await redisCommand([
+    "SET",
+    itemKey,
+    JSON.stringify(reviewItem),
+    "EX",
+    REVIEW_ITEM_TTL_SECONDS,
+  ]);
+
+  await redisCommand([
+    "ZADD",
+    indexKey,
+    String(
+      Number.isFinite(createdScore)
+        ? createdScore
+        : Date.now()
+    ),
+    reviewItem.id,
+  ]);
+
+  await redisCommand([
+    "EXPIRE",
+    indexKey,
+    REVIEW_ITEM_TTL_SECONDS,
+  ]);
 }
 
 async function createMicrosoftTask(listId, payload, accessToken) {

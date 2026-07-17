@@ -25,6 +25,12 @@ document.addEventListener("DOMContentLoaded", async function () {
   const recentTaskList = document.getElementById("recentTaskList");
   const todayTaskList = document.getElementById("todayTaskList");
   const reviewTaskList = document.getElementById("reviewTaskList");
+  const refreshReviewButton = document.getElementById(
+    "refreshReviewButton"
+  );
+  const serverReviewStatus = document.getElementById(
+    "serverReviewStatus"
+  );
 
   const inboxCount = document.getElementById("inboxCount");
   const reviewCount = document.getElementById("reviewCount");
@@ -126,6 +132,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   let microsoftAuthReady = false;
   let microsoftTodoLists = [];
   let microsoftActionQueueRunning = false;
+  let serverReviewLoading = false;
 
   if (
     !captureForm ||
@@ -145,6 +152,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   renderEverything();
   await initializeMicrosoftSignIn();
   await resumeVoiceSetup();
+  await loadServerReviewInbox();
   await processPendingMicrosoftActions();
 
   function registerEvents() {
@@ -153,6 +161,10 @@ document.addEventListener("DOMContentLoaded", async function () {
     navButtons.forEach(function (button) {
       button.addEventListener("click", function () {
         showScreen(button.dataset.screen);
+
+        if (button.dataset.screen === "reviewScreen") {
+          loadServerReviewInbox();
+        }
       });
     });
 
@@ -236,7 +248,17 @@ document.addEventListener("DOMContentLoaded", async function () {
       );
     }
 
+    if (refreshReviewButton) {
+      refreshReviewButton.addEventListener(
+        "click",
+        function () {
+          loadServerReviewInbox(true);
+        }
+      );
+    }
+
     window.addEventListener("online", function () {
+      loadServerReviewInbox();
       processPendingMicrosoftActions();
     });
   }
@@ -939,6 +961,263 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
   }
 
+  function setServerReviewStatus(message, isError) {
+    if (!serverReviewStatus) {
+      return;
+    }
+
+    serverReviewStatus.textContent = message || "";
+    serverReviewStatus.classList.toggle(
+      "error-message",
+      Boolean(isError)
+    );
+  }
+
+  async function loadServerReviewInbox(forceRefresh) {
+    const savedSetup = loadSavedVoiceSetup();
+
+    if (!savedSetup || !savedSetup.voiceKey) {
+      setServerReviewStatus(
+        "Set up Voice Capture to load spoken captures here."
+      );
+      return;
+    }
+
+    if (!navigator.onLine) {
+      setServerReviewStatus(
+        "Offline. Showing the last Voice Review items saved on this device."
+      );
+      return;
+    }
+
+    if (serverReviewLoading && !forceRefresh) {
+      return;
+    }
+
+    serverReviewLoading = true;
+
+    if (refreshReviewButton) {
+      refreshReviewButton.disabled = true;
+      refreshReviewButton.textContent = "Refreshing...";
+    }
+
+    setServerReviewStatus(
+      "Loading Voice Capture review items..."
+    );
+
+    try {
+      const response = await fetch(
+        "/api/voice-review-inbox",
+        {
+          method: "GET",
+          headers: {
+            Accept: "application/json",
+            "x-gsd-capture-key":
+              savedSetup.voiceKey,
+          },
+          cache: "no-store",
+        }
+      );
+
+      const data = await response.json().catch(function () {
+        return null;
+      });
+
+      if (!response.ok || !data || !Array.isArray(data.items)) {
+        throw new Error(
+          data && data.error
+            ? data.error
+            : "Voice Review items could not be loaded."
+        );
+      }
+
+      const preservedTasks = tasks.filter(function (task) {
+        return !task.serverReviewPending;
+      });
+      const serverTasks = data.items.map(
+        mapServerReviewItemToTask
+      );
+
+      tasks = serverTasks.concat(preservedTasks);
+      saveTasks();
+      renderEverything();
+
+      setServerReviewStatus(
+        serverTasks.length === 0
+          ? "No new Voice Capture items are waiting for review."
+          : serverTasks.length +
+              (serverTasks.length === 1
+                ? " Voice Capture item is waiting for review."
+                : " Voice Capture items are waiting for review.")
+      );
+    } catch (error) {
+      console.error(
+        "Voice Review Inbox could not be loaded:",
+        error
+      );
+
+      setServerReviewStatus(
+        error && error.message
+          ? error.message
+          : "Voice Review items could not be loaded.",
+        true
+      );
+    } finally {
+      serverReviewLoading = false;
+
+      if (refreshReviewButton) {
+        refreshReviewButton.disabled = false;
+        refreshReviewButton.textContent = "Refresh";
+      }
+    }
+  }
+
+  function mapServerReviewItemToTask(item) {
+    const reviewId = String(item.id || "");
+
+    return {
+      id: "voice-review-" + reviewId,
+      serverReviewId: reviewId,
+      serverReviewPending: true,
+      serverReviewStatus: item.status || "pending",
+      source: "voice-server",
+      title:
+        typeof item.title === "string" && item.title.trim()
+          ? item.title.trim()
+          : String(item.originalText || "Voice capture"),
+      originalText: String(item.originalText || ""),
+      category:
+        item.suggestedCategory || item.category || "General",
+      suggestedCategory:
+        item.suggestedCategory || item.category || "General",
+      aiConfidence:
+        Number.isInteger(item.confidence)
+          ? item.confidence
+          : null,
+      aiExplanation:
+        typeof item.explanation === "string"
+          ? item.explanation
+          : "",
+      priority: item.priority || "Normal",
+      dueDate: item.dueDate || "",
+      context: item.context || "",
+      project: item.project || "",
+      estimatedMinutes:
+        typeof item.estimatedMinutes === "number"
+          ? item.estimatedMinutes
+          : null,
+      needsReview: true,
+      sortingMethod: item.sortingMethod || "ai",
+      plannedForToday: false,
+      completed: false,
+      createdAt:
+        item.createdAt || new Date().toISOString(),
+      microsoftTaskId: item.microsoftTaskId || "",
+      microsoftListId:
+        item.microsoftReviewListId || "",
+      microsoftListName:
+        item.microsoftReviewListName ||
+        MICROSOFT_REVIEW_LIST_NAME,
+      microsoftSyncStatus: "synced",
+      microsoftSyncError: "",
+      microsoftSyncAttemptedAt: "",
+      microsoftSyncedAt:
+        item.createdAt || new Date().toISOString(),
+      microsoftReviewTaskId:
+        item.microsoftTaskId || "",
+      microsoftReviewListId:
+        item.microsoftReviewListId || "",
+      microsoftReviewListName:
+        item.microsoftReviewListName ||
+        MICROSOFT_REVIEW_LIST_NAME,
+      microsoftMoveTargetTaskId: "",
+      microsoftMoveTargetListId: "",
+      microsoftMoveTargetListName: "",
+      microsoftPendingAction: "",
+      microsoftActionError: "",
+      microsoftActionSyncedAt: "",
+      localDeleted: false,
+    };
+  }
+
+  async function updateServerReviewStatus(
+    task,
+    status,
+    finalListName
+  ) {
+    if (!task || !task.serverReviewId) {
+      return true;
+    }
+
+    const savedSetup = loadSavedVoiceSetup();
+
+    if (!savedSetup || !savedSetup.voiceKey) {
+      throw new Error(
+        "Voice Capture needs to be set up again before this review decision can be saved."
+      );
+    }
+
+    const response = await fetch(
+      "/api/voice-review-inbox",
+      {
+        method: "PATCH",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "x-gsd-capture-key":
+            savedSetup.voiceKey,
+        },
+        body: JSON.stringify({
+          reviewId: task.serverReviewId,
+          status,
+          finalCategory: task.category || "",
+          finalListName: finalListName || "",
+        }),
+      }
+    );
+
+    const data = await response.json().catch(function () {
+      return null;
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        data && data.error
+          ? data.error
+          : "The review decision could not be saved."
+      );
+    }
+
+    task.serverReviewPending = false;
+    task.serverReviewStatus = status;
+    return true;
+  }
+
+  async function keepTaskInGsdReview(task) {
+    try {
+      await updateServerReviewStatus(
+        task,
+        "kept",
+        MICROSOFT_REVIEW_LIST_NAME
+      );
+
+      task.needsReview = false;
+      task.microsoftSyncStatus = "synced";
+      saveTasks();
+      renderEverything();
+      showCaptureMessage(
+        "Kept in GSD Review. The item is no longer waiting for a decision in the app."
+      );
+    } catch (error) {
+      showCaptureMessage(
+        error && error.message
+          ? error.message
+          : "The review decision could not be saved.",
+        true
+      );
+    }
+  }
+
   async function loadMicrosoftTodoLists() {
     if (!navigator.onLine) {
       setMicrosoftListMessage(
@@ -1208,7 +1487,11 @@ document.addEventListener("DOMContentLoaded", async function () {
 
   function getSuggestedMicrosoftListName(task) {
     const category = String(
-      task && task.category ? task.category : ""
+      task && task.approvedListName
+        ? task.approvedListName
+        : task && task.category
+          ? task.category
+          : ""
     ).trim();
 
     if (!category || category.toLocaleLowerCase() === "general") {
@@ -1361,6 +1644,30 @@ document.addEventListener("DOMContentLoaded", async function () {
       settings.microsoftListName || "Microsoft To Do";
     const mode = settings.aiListRouting || "ask";
     const suggestedListName = getSuggestedMicrosoftListName(task);
+
+    if (task.approvedListName && suggestedListName) {
+      await ensureMicrosoftTodoListsForRouting(accessToken);
+
+      let approvedList = findMicrosoftListByName(
+        suggestedListName
+      );
+
+      if (!approvedList) {
+        approvedList = await createMicrosoftTodoList(
+          suggestedListName,
+          accessToken
+        );
+      }
+
+      task.microsoftListId = approvedList.id;
+      task.microsoftListName =
+        approvedList.displayName || suggestedListName;
+
+      return {
+        listId: approvedList.id,
+        created: false,
+      };
+    }
 
     if (mode === "selected-only" || !suggestedListName) {
       task.microsoftListId = selectedListId;
@@ -2094,6 +2401,21 @@ document.addEventListener("DOMContentLoaded", async function () {
     renderEverything();
 
     if (!task.microsoftPendingAction) {
+      if (task.serverReviewId) {
+        try {
+          await updateServerReviewStatus(
+            task,
+            "completed",
+            task.microsoftListName || ""
+          );
+        } catch (error) {
+          console.error(
+            "The server Review Inbox could not save completion:",
+            error
+          );
+        }
+      }
+
       showCaptureMessage(
         "Completed in GSD Capture. This item did not have a Microsoft To Do copy."
       );
@@ -2103,6 +2425,21 @@ document.addEventListener("DOMContentLoaded", async function () {
     const result = await processMicrosoftActionForTask(task);
 
     if (result.status === "synced") {
+      if (task.serverReviewId) {
+        try {
+          await updateServerReviewStatus(
+            task,
+            "completed",
+            task.microsoftListName || ""
+          );
+        } catch (error) {
+          console.error(
+            "The server Review Inbox could not save completion:",
+            error
+          );
+        }
+      }
+
       showCaptureMessage(
         "Completed in GSD Capture and Microsoft To Do."
       );
@@ -2120,6 +2457,22 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
 
     if (!hasMicrosoftTaskReference(task)) {
+      if (task.serverReviewId) {
+        try {
+          await updateServerReviewStatus(
+            task,
+            "rejected",
+            ""
+          );
+        } catch (error) {
+          showCaptureMessage(
+            "The item could not be removed from the server Review Inbox.",
+            true
+          );
+          return;
+        }
+      }
+
       tasks = tasks.filter(function (item) {
         return item.id !== task.id;
       });
@@ -2138,6 +2491,21 @@ document.addEventListener("DOMContentLoaded", async function () {
     const result = await processMicrosoftActionForTask(task);
 
     if (result.status === "synced") {
+      if (task.serverReviewId) {
+        try {
+          await updateServerReviewStatus(
+            task,
+            "rejected",
+            ""
+          );
+        } catch (error) {
+          console.error(
+            "The server Review Inbox could not save the rejection:",
+            error
+          );
+        }
+      }
+
       showCaptureMessage(
         "Deleted from GSD Capture and Microsoft To Do."
       );
@@ -2268,6 +2636,24 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
   }
 
+  async function chooseDifferentFolderAndApprove(task) {
+    const folderName = window.prompt(
+      "Enter the Microsoft To Do folder name for this task:",
+      task.category || task.suggestedCategory || "General"
+    );
+
+    if (!folderName || !folderName.trim()) {
+      return;
+    }
+
+    task.category = folderName.trim().slice(0, 80);
+    task.approvedListName = task.category;
+    saveTasks();
+    renderEverything();
+
+    await approveTaskAndSync(task);
+  }
+
   async function approveTaskAndSync(task) {
     const hasReviewTask = Boolean(
       task.microsoftReviewTaskId ||
@@ -2277,7 +2663,34 @@ document.addEventListener("DOMContentLoaded", async function () {
     );
 
     if (hasReviewTask) {
-      await moveReviewedTaskToDestination(task);
+      const result = await moveReviewedTaskToDestination(task);
+
+      if (result.status === "synced") {
+        try {
+          await updateServerReviewStatus(
+            task,
+            "approved",
+            task.microsoftListName || task.category
+          );
+          saveTasks();
+          renderEverything();
+          showCaptureMessage(
+            "Approved and moved to " +
+              (task.microsoftListName || task.category || "Microsoft To Do") +
+              "."
+          );
+        } catch (error) {
+          console.error(
+            "The server review decision could not be saved:",
+            error
+          );
+          showCaptureMessage(
+            "The task moved in Microsoft To Do, but the app could not save the review decision. Refresh and try again.",
+            true
+          );
+        }
+      }
+
       return;
     }
 
@@ -2293,7 +2706,17 @@ document.addEventListener("DOMContentLoaded", async function () {
       return;
     }
 
-    await syncTaskToMicrosoft(task);
+    const result = await syncTaskToMicrosoft(task);
+
+    if (result.status === "synced") {
+      await updateServerReviewStatus(
+        task,
+        "approved",
+        task.microsoftListName || task.category
+      );
+      saveTasks();
+      renderEverything();
+    }
   }
 
   function setMicrosoftTestTaskButtonBusy(isBusy) {
@@ -2855,6 +3278,39 @@ document.addEventListener("DOMContentLoaded", async function () {
       const originalText = document.createElement("p");
       originalText.textContent = task.originalText;
 
+      let suggestionPanel = null;
+
+      if (
+        location === "review" &&
+        (task.suggestedCategory ||
+          Number.isInteger(task.aiConfidence) ||
+          task.aiExplanation)
+      ) {
+        suggestionPanel = document.createElement("div");
+        suggestionPanel.className = "review-suggestion";
+
+        const suggestionHeading = document.createElement("strong");
+        suggestionHeading.textContent =
+          "AI suggests: " +
+          (task.suggestedCategory ||
+            task.category ||
+            "General");
+        suggestionPanel.appendChild(suggestionHeading);
+
+        if (Number.isInteger(task.aiConfidence)) {
+          const confidenceText = document.createElement("span");
+          confidenceText.textContent =
+            "Confidence: " + task.aiConfidence + "%";
+          suggestionPanel.appendChild(confidenceText);
+        }
+
+        if (task.aiExplanation) {
+          const explanationText = document.createElement("p");
+          explanationText.textContent = task.aiExplanation;
+          suggestionPanel.appendChild(explanationText);
+        }
+      }
+
       const meta = document.createElement("div");
       meta.className = "task-meta";
 
@@ -2904,13 +3360,35 @@ document.addEventListener("DOMContentLoaded", async function () {
       if (location === "review") {
         actions.appendChild(
           createButton(
-            "Approve",
+            "Approve Suggested Folder",
             "",
             function () {
               approveTaskAndSync(task);
             }
           )
         );
+
+        actions.appendChild(
+          createButton(
+            "Choose Different Folder",
+            "",
+            function () {
+              chooseDifferentFolderAndApprove(task);
+            }
+          )
+        );
+
+        if (task.serverReviewId) {
+          actions.appendChild(
+            createButton(
+              "Keep in GSD Review",
+              "",
+              function () {
+                keepTaskInGsdReview(task);
+              }
+            )
+          );
+        }
       }
 
       actions.appendChild(
@@ -2976,6 +3454,10 @@ document.addEventListener("DOMContentLoaded", async function () {
 
       if (task.originalText !== task.title) {
         card.appendChild(originalText);
+      }
+
+      if (suggestionPanel) {
+        card.appendChild(suggestionPanel);
       }
 
       card.appendChild(meta);
