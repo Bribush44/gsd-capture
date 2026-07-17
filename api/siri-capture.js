@@ -22,6 +22,7 @@ export default async function handler(request, response) {
     response.setHeader("Allow", "POST");
     return response.status(405).json({
       error: "Only POST requests are allowed.",
+message: "Capture is unavailable from this request. Please try again.",
     });
   }
 
@@ -40,6 +41,7 @@ export default async function handler(request, response) {
     if (!safeSecretMatch(suppliedSecret, process.env.SIRI_CAPTURE_SECRET)) {
       return response.status(401).json({
         error: "The Siri capture key is invalid.",
+message: "Capture needs to be set up again. Please open GSD Capture.",
       });
     }
 
@@ -51,12 +53,14 @@ export default async function handler(request, response) {
     if (!text) {
       return response.status(400).json({
         error: "Task text is required.",
+message: "I did not hear a task. Please try Capture again.",
       });
     }
 
     if (text.length > 1000) {
       return response.status(400).json({
         error: "Task text must be 1,000 characters or fewer.",
+message: "That task was too long. Please try a shorter capture.",
       });
     }
 
@@ -80,6 +84,7 @@ export default async function handler(request, response) {
     if (!connection || !connection.refreshToken) {
       return response.status(409).json({
         error: "Siri background capture is not connected to Microsoft To Do.",
+message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnect Siri capture.",
         connectUrl: "https://gsd-capture.vercel.app/api/microsoft-connect",
       });
     }
@@ -139,18 +144,61 @@ export default async function handler(request, response) {
   } catch (error) {
     console.error("Siri capture failed:", error);
 
-    const message = error && error.message ? error.message : "Capture failed.";
+    const technicalMessage =
+      error && error.message ? error.message : "Capture failed.";
+
+    const lowerTechnicalMessage = technicalMessage.toLowerCase();
+
     const reconnectRequired =
-      message.includes("reconnect") || message.includes("refresh token");
+      lowerTechnicalMessage.includes("reconnect") ||
+      lowerTechnicalMessage.includes("refresh token") ||
+      lowerTechnicalMessage.includes("not connected");
 
     return response.status(reconnectRequired ? 409 : 500).json({
-      error: message,
+      error: technicalMessage,
+      message: getFriendlyCaptureErrorMessage(technicalMessage),
       reconnectRequired: reconnectRequired,
       connectUrl: reconnectRequired
         ? "https://gsd-capture.vercel.app/api/microsoft-connect"
         : undefined,
     });
   }
+}
+
+function getFriendlyCaptureErrorMessage(message) {
+  const lowerMessage = String(message || "").toLowerCase();
+
+  if (
+    lowerMessage.includes("reconnect") ||
+    lowerMessage.includes("refresh token") ||
+    lowerMessage.includes("not connected")
+  ) {
+    return "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnect Siri capture.";
+  }
+
+  if (lowerMessage.includes("too many siri capture requests")) {
+    return "There have been too many capture requests. Please wait a few minutes and try again.";
+  }
+
+  if (lowerMessage.includes("request id")) {
+    return "I could not create a valid capture request. Please try again.";
+  }
+
+  if (
+    lowerMessage.includes("microsoft") ||
+    lowerMessage.includes("graph")
+  ) {
+    return "Microsoft To Do could not save the task. Please try again.";
+  }
+
+  if (
+    lowerMessage.includes("secure storage") ||
+    lowerMessage.includes("environment variable")
+  ) {
+    return "Capture is temporarily unavailable. Please try again in a few minutes.";
+  }
+
+  return "I could not save that task. Please try again.";
 }
 
 function parseRequestBody(value) {
