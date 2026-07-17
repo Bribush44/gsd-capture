@@ -1,0 +1,727 @@
+"use strict";
+
+import { timingSafeEqual } from "node:crypto";
+
+const CONNECTION_KEY = "gsd:siri:microsoft:connection";
+const REQUEST_PREFIX = "gsd:siri:request:";
+const RATE_PREFIX = "gsd:siri:rate:";
+const MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/common";
+const MICROSOFT_REVIEW_LIST_NAME = "GSD Review";
+const MICROSOFT_SCOPES = [
+  "openid",
+  "profile",
+  "offline_access",
+  "User.Read",
+  "Tasks.ReadWrite",
+];
+
+export default async function handler(request, response) {
+  response.setHeader("Cache-Control", "no-store");
+
+  if (request.method !== "POST") {
+    response.setHeader("Allow", "POST");
+    return response.status(405).json({
+      error: "Only POST requests are allowed.",
+    });
+  }
+
+  try {
+    requireEnvironment([
+      "SIRI_CAPTURE_SECRET",
+      "MICROSOFT_CLIENT_ID",
+      "MICROSOFT_CLIENT_SECRET",
+      "KV_REST_API_URL",
+      "KV_REST_API_TOKEN",
+      "OPENAI_API_KEY",
+    ]);
+
+    const suppliedSecret = readSuppliedSecret(request);
+
+    if (!safeSecretMatch(suppliedSecret, process.env.SIRI_CAPTURE_SECRET)) {
+      return response.status(401).json({
+        error: "The Siri capture key is invalid.",
+      });
+    }
+
+    const body = parseRequestBody(request.body);
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const requestId = sanitizeRequestId(body.requestId);
+    const currentDate = sanitizeCurrentDate(body.currentDate);
+
+    if (!text) {
+      return response.status(400).json({
+        error: "Task text is required.",
+      });
+    }
+
+    if (text.length > 1000) {
+      return response.status(400).json({
+        error: "Task text must be 1,000 characters or fewer.",
+      });
+    }
+
+    await enforceRateLimit(request);
+
+    if (requestId) {
+      const existingResult = await redisCommand([
+        "GET",
+        REQUEST_PREFIX + requestId,
+      ]);
+
+      if (existingResult) {
+        const parsedResult = JSON.parse(existingResult);
+        parsedResult.duplicateRequest = true;
+        return response.status(200).json(parsedResult);
+      }
+    }
+
+    const connection = await readConnection();
+
+    if (!connection || !connection.refreshToken) {
+      return response.status(409).json({
+        error: "Siri background capture is not connected to Microsoft To Do.",
+        connectUrl: "https://gsd-capture.vercel.app/api/microsoft-connect",
+      });
+    }
+
+    const tokenResult = await refreshMicrosoftAccessToken(
+      connection.refreshToken
+    );
+
+    if (tokenResult.refresh_token) {
+      connection.refreshToken = tokenResult.refresh_token;
+      connection.refreshedAt = new Date().toISOString();
+      await saveConnection(connection);
+    }
+
+    const classification = await classifyTask(text, currentDate);
+    const accessToken = tokenResult.access_token;
+    const destinationList = await resolveDestinationList(
+      classification,
+      accessToken
+    );
+    const taskPayload = buildMicrosoftTaskPayload(
+      text,
+      classification,
+      requestId
+    );
+    const microsoftTask = await createMicrosoftTask(
+      destinationList.id,
+      taskPayload,
+      accessToken
+    );
+
+    const result = {
+      ok: true,
+      summary: classification.summary,
+      category: classification.category,
+      priority: classification.priority,
+      dueDate: classification.dueDate,
+      needsReview: classification.needsReview,
+      listName: destinationList.displayName,
+      microsoftTaskId: microsoftTask.id,
+      message: classification.needsReview
+        ? "Captured and added to GSD Review for review."
+        : "Captured and added to " + destinationList.displayName + ".",
+    };
+
+    if (requestId) {
+      await redisCommand([
+        "SET",
+        REQUEST_PREFIX + requestId,
+        JSON.stringify(result),
+        "EX",
+        604800,
+      ]);
+    }
+
+    return response.status(200).json(result);
+  } catch (error) {
+    console.error("Siri capture failed:", error);
+
+    const message = error && error.message ? error.message : "Capture failed.";
+    const reconnectRequired =
+      message.includes("reconnect") || message.includes("refresh token");
+
+    return response.status(reconnectRequired ? 409 : 500).json({
+      error: message,
+      reconnectRequired: reconnectRequired,
+      connectUrl: reconnectRequired
+        ? "https://gsd-capture.vercel.app/api/microsoft-connect"
+        : undefined,
+    });
+  }
+}
+
+function parseRequestBody(value) {
+  if (!value) {
+    return {};
+  }
+
+  if (typeof value === "string") {
+    return JSON.parse(value);
+  }
+
+  return value;
+}
+
+function readSuppliedSecret(request) {
+  const headerValue =
+    request.headers["x-gsd-capture-key"] ||
+    request.headers["X-GSD-Capture-Key"] ||
+    "";
+
+  if (headerValue) {
+    return String(headerValue);
+  }
+
+  const authorization = String(request.headers.authorization || "");
+  return authorization.toLowerCase().startsWith("bearer ")
+    ? authorization.slice(7).trim()
+    : "";
+}
+
+function safeSecretMatch(supplied, expected) {
+  const suppliedBuffer = Buffer.from(String(supplied || ""));
+  const expectedBuffer = Buffer.from(String(expected || ""));
+
+  if (
+    suppliedBuffer.length === 0 ||
+    suppliedBuffer.length !== expectedBuffer.length
+  ) {
+    return false;
+  }
+
+  return timingSafeEqual(suppliedBuffer, expectedBuffer);
+}
+
+function sanitizeRequestId(value) {
+  const requestId = typeof value === "string" ? value.trim() : "";
+
+  if (!requestId) {
+    return "";
+  }
+
+  if (!/^[A-Za-z0-9._:-]{1,160}$/.test(requestId)) {
+    throw new Error("The request ID is invalid.");
+  }
+
+  return requestId;
+}
+
+function sanitizeCurrentDate(value) {
+  const currentDate = typeof value === "string" ? value.trim() : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(currentDate)
+    ? currentDate
+    : new Date().toISOString().slice(0, 10);
+}
+
+async function enforceRateLimit(request) {
+  const forwardedFor = String(request.headers["x-forwarded-for"] || "unknown");
+  const ip = forwardedFor.split(",")[0].trim().replace(/[^A-Za-z0-9:._-]/g, "");
+  const hour = new Date().toISOString().slice(0, 13);
+  const key = RATE_PREFIX + ip + ":" + hour;
+  const count = Number(await redisCommand(["INCR", key]));
+
+  if (count === 1) {
+    await redisCommand(["EXPIRE", key, 3700]);
+  }
+
+  if (count > 120) {
+    throw new Error("Too many Siri capture requests. Try again later.");
+  }
+}
+
+async function readConnection() {
+  const stored = await redisCommand(["GET", CONNECTION_KEY]);
+  return stored ? JSON.parse(stored) : null;
+}
+
+async function saveConnection(connection) {
+  await redisCommand(["SET", CONNECTION_KEY, JSON.stringify(connection)]);
+}
+
+async function refreshMicrosoftAccessToken(refreshToken) {
+  const tokenResponse = await fetch(
+    MICROSOFT_AUTHORITY + "/oauth2/v2.0/token",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        client_id: process.env.MICROSOFT_CLIENT_ID,
+        client_secret: process.env.MICROSOFT_CLIENT_SECRET,
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+        scope: MICROSOFT_SCOPES.join(" "),
+      }).toString(),
+    }
+  );
+
+  const tokenData = await tokenResponse.json().catch(function () {
+    return null;
+  });
+
+  if (!tokenResponse.ok || !tokenData || !tokenData.access_token) {
+    const message =
+      tokenData && tokenData.error_description
+        ? tokenData.error_description
+        : "The Microsoft refresh token is no longer valid. Please reconnect Siri capture.";
+    throw new Error(message);
+  }
+
+  return tokenData;
+}
+
+async function classifyTask(text, currentDate) {
+  try {
+    const openAIResponse = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + process.env.OPENAI_API_KEY,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "gpt-5.6-luna",
+        store: false,
+        reasoning: { effort: "none" },
+        max_output_tokens: 400,
+        input: [
+          {
+            role: "system",
+            content: [
+              {
+                type: "input_text",
+                text:
+                  "You organize captured tasks using GTD principles. " +
+                  "Return a practical classification without inventing details. " +
+                  "Today's date is " +
+                  currentDate +
+                  ". Convert clear relative dates such as today or tomorrow into YYYY-MM-DD. " +
+                  "Use null when a date, project, or duration cannot reasonably be determined.",
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [{ type: "input_text", text: text }],
+          },
+        ],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "gsd_siri_task_classification",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: {
+                summary: { type: "string" },
+                category: {
+                  type: "string",
+                  enum: [
+                    "Purchasing",
+                    "Operations",
+                    "Leadership",
+                    "Personal",
+                    "Ideas",
+                    "General",
+                  ],
+                },
+                priority: {
+                  type: "string",
+                  enum: ["High", "Normal", "Low"],
+                },
+                dueDate: { type: ["string", "null"] },
+                context: {
+                  type: "string",
+                  enum: [
+                    "Calls",
+                    "Computer",
+                    "Errands",
+                    "Work",
+                    "Home",
+                    "Anywhere",
+                  ],
+                },
+                project: { type: ["string", "null"] },
+                estimatedMinutes: {
+                  type: ["integer", "null"],
+                  minimum: 1,
+                  maximum: 480,
+                },
+                needsReview: { type: "boolean" },
+              },
+              required: [
+                "summary",
+                "category",
+                "priority",
+                "dueDate",
+                "context",
+                "project",
+                "estimatedMinutes",
+                "needsReview",
+              ],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    });
+
+    const openAIData = await openAIResponse.json().catch(function () {
+      return null;
+    });
+
+    if (!openAIResponse.ok || !openAIData) {
+      throw new Error("AI sorting failed.");
+    }
+
+    const outputText =
+      openAIData.output_text ||
+      openAIData.output
+        ?.flatMap(function (item) {
+          return Array.isArray(item.content) ? item.content : [];
+        })
+        .find(function (content) {
+          return content.type === "output_text";
+        })?.text;
+
+    if (!outputText) {
+      throw new Error("AI sorting returned no result.");
+    }
+
+    return normalizeClassification(JSON.parse(outputText), text);
+  } catch (error) {
+    console.warn("Siri AI sorting failed; using safe local fallback:", error);
+    return localFallbackClassification(text, currentDate);
+  }
+}
+
+function normalizeClassification(value, originalText) {
+  const allowedCategories = [
+    "Purchasing",
+    "Operations",
+    "Leadership",
+    "Personal",
+    "Ideas",
+    "General",
+  ];
+  const allowedPriorities = ["High", "Normal", "Low"];
+  const allowedContexts = [
+    "Calls",
+    "Computer",
+    "Errands",
+    "Work",
+    "Home",
+    "Anywhere",
+  ];
+
+  return {
+    summary:
+      typeof value.summary === "string" && value.summary.trim()
+        ? value.summary.trim().slice(0, 300)
+        : originalText.slice(0, 300),
+    category: allowedCategories.includes(value.category)
+      ? value.category
+      : "General",
+    priority: allowedPriorities.includes(value.priority)
+      ? value.priority
+      : "Normal",
+    dueDate:
+      typeof value.dueDate === "string" &&
+      /^\d{4}-\d{2}-\d{2}$/.test(value.dueDate)
+        ? value.dueDate
+        : null,
+    context: allowedContexts.includes(value.context)
+      ? value.context
+      : "Anywhere",
+    project:
+      typeof value.project === "string" && value.project.trim()
+        ? value.project.trim().slice(0, 200)
+        : null,
+    estimatedMinutes:
+      Number.isInteger(value.estimatedMinutes) &&
+      value.estimatedMinutes >= 1 &&
+      value.estimatedMinutes <= 480
+        ? value.estimatedMinutes
+        : null,
+    needsReview: Boolean(value.needsReview),
+    sortingMethod: "ai",
+  };
+}
+
+function localFallbackClassification(text, currentDate) {
+  const lowerText = text.toLowerCase();
+  let category = "General";
+  let priority = "Normal";
+  let context = "Work";
+  let dueDate = null;
+
+  if (/supplier|vendor|quote|purchase/.test(lowerText)) {
+    category = "Purchasing";
+  } else if (/warehouse|inventory|shipment|receiving|production/.test(lowerText)) {
+    category = "Operations";
+  } else if (/team|employee|meeting|coach|leader/.test(lowerText)) {
+    category = "Leadership";
+  } else if (/home|family|personal/.test(lowerText)) {
+    category = "Personal";
+  } else if (/idea|maybe|someday/.test(lowerText)) {
+    category = "Ideas";
+  }
+
+  if (/important|urgent|asap|high priority/.test(lowerText)) {
+    priority = "High";
+  }
+
+  if (/call|phone/.test(lowerText)) {
+    context = "Calls";
+  } else if (/computer|email/.test(lowerText)) {
+    context = "Computer";
+  } else if (/pick up|store|errand/.test(lowerText)) {
+    context = "Errands";
+  } else if (category === "Personal") {
+    context = "Home";
+  }
+
+  if (lowerText.includes("today")) {
+    dueDate = currentDate;
+  } else if (lowerText.includes("tomorrow")) {
+    const date = new Date(currentDate + "T12:00:00Z");
+    date.setUTCDate(date.getUTCDate() + 1);
+    dueDate = date.toISOString().slice(0, 10);
+  }
+
+  return {
+    summary: text.slice(0, 300),
+    category: category,
+    priority: priority,
+    dueDate: dueDate,
+    context: context,
+    project: null,
+    estimatedMinutes: null,
+    needsReview: true,
+    sortingMethod: "local",
+  };
+}
+
+async function resolveDestinationList(classification, accessToken) {
+  const lists = await listMicrosoftTodoLists(accessToken);
+  const desiredName = classification.needsReview
+    ? MICROSOFT_REVIEW_LIST_NAME
+    : classification.category === "General"
+      ? "Tasks"
+      : classification.category;
+
+  let matchingList = findListByName(lists, desiredName);
+
+  if (!matchingList && desiredName === "Tasks") {
+    matchingList = lists.find(function (list) {
+      return list.wellknownListName === "defaultList";
+    });
+  }
+
+  if (!matchingList && desiredName !== "Tasks") {
+    matchingList = await createMicrosoftTodoList(desiredName, accessToken);
+  }
+
+  if (!matchingList) {
+    throw new Error("The Microsoft To Do destination list could not be found.");
+  }
+
+  return matchingList;
+}
+
+async function listMicrosoftTodoLists(accessToken) {
+  const graphResponse = await fetch(
+    "https://graph.microsoft.com/v1.0/me/todo/lists",
+    {
+      headers: {
+        Authorization: "Bearer " + accessToken,
+        Accept: "application/json",
+      },
+    }
+  );
+
+  const data = await graphResponse.json().catch(function () {
+    return null;
+  });
+
+  if (!graphResponse.ok) {
+    throw new Error(readGraphError(data, graphResponse.status));
+  }
+
+  return data && Array.isArray(data.value) ? data.value : [];
+}
+
+function findListByName(lists, name) {
+  const normalizedName = String(name).trim().toLocaleLowerCase();
+  return lists.find(function (list) {
+    return (
+      String(list.displayName || "").trim().toLocaleLowerCase() ===
+      normalizedName
+    );
+  });
+}
+
+async function createMicrosoftTodoList(displayName, accessToken) {
+  const graphResponse = await fetch(
+    "https://graph.microsoft.com/v1.0/me/todo/lists",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + accessToken,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ displayName: displayName.slice(0, 80) }),
+    }
+  );
+
+  const data = await graphResponse.json().catch(function () {
+    return null;
+  });
+
+  if (!graphResponse.ok || !data || !data.id) {
+    throw new Error(readGraphError(data, graphResponse.status));
+  }
+
+  return data;
+}
+
+function buildMicrosoftTaskPayload(originalText, classification, requestId) {
+  const notes = [];
+
+  if (originalText !== classification.summary) {
+    notes.push("Original capture: " + originalText);
+  }
+
+  notes.push("Category: " + classification.category);
+  notes.push("Priority: " + classification.priority);
+
+  if (classification.needsReview) {
+    notes.push("Review status: Needs review in GSD Capture");
+  }
+
+  if (classification.context) {
+    notes.push("Context: " + classification.context);
+  }
+
+  if (classification.project) {
+    notes.push("Project: " + classification.project);
+  }
+
+  if (classification.estimatedMinutes) {
+    notes.push(
+      "Estimated duration: " + classification.estimatedMinutes + " minutes"
+    );
+  }
+
+  notes.push(
+    "Sorted by: " +
+      (classification.sortingMethod === "ai"
+        ? "GSD Capture AI"
+        : "GSD Capture local fallback")
+  );
+  notes.push("Captured through: Siri Shortcut");
+
+  if (requestId) {
+    notes.push("GSD Siri Request ID: " + requestId);
+  }
+
+  const payload = {
+    title: classification.summary,
+    importance: getMicrosoftImportance(classification.priority),
+    body: {
+      contentType: "text",
+      content: notes.join("\n"),
+    },
+  };
+
+  if (classification.dueDate) {
+    payload.dueDateTime = {
+      dateTime: classification.dueDate + "T12:00:00",
+      timeZone: "UTC",
+    };
+  }
+
+  return payload;
+}
+
+function getMicrosoftImportance(priority) {
+  if (priority === "High") {
+    return "high";
+  }
+
+  if (priority === "Low") {
+    return "low";
+  }
+
+  return "normal";
+}
+
+async function createMicrosoftTask(listId, payload, accessToken) {
+  const graphResponse = await fetch(
+    "https://graph.microsoft.com/v1.0/me/todo/lists/" +
+      encodeURIComponent(listId) +
+      "/tasks",
+    {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + accessToken,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    }
+  );
+
+  const data = await graphResponse.json().catch(function () {
+    return null;
+  });
+
+  if (!graphResponse.ok || !data || !data.id) {
+    throw new Error(readGraphError(data, graphResponse.status));
+  }
+
+  return data;
+}
+
+function readGraphError(data, status) {
+  return data && data.error && data.error.message
+    ? data.error.message
+    : "Microsoft Graph returned " + status + ".";
+}
+
+function requireEnvironment(names) {
+  const missing = names.filter(function (name) {
+    return !process.env[name];
+  });
+
+  if (missing.length > 0) {
+    throw new Error("Missing environment variables: " + missing.join(", "));
+  }
+}
+
+async function redisCommand(command) {
+  const redisResponse = await fetch(process.env.KV_REST_API_URL, {
+    method: "POST",
+    headers: {
+      Authorization: "Bearer " + process.env.KV_REST_API_TOKEN,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(command),
+  });
+
+  const data = await redisResponse.json().catch(function () {
+    return null;
+  });
+
+  if (!redisResponse.ok || !data || data.error) {
+    throw new Error(
+      data && data.error ? data.error : "Secure storage request failed."
+    );
+  }
+
+  return data.result;
+}
