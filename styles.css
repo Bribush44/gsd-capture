@@ -648,3 +648,49 @@ select:focus {
   color: var(--danger);
 }
 
+
+.review-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.review-server-status {
+  min-height: 20px;
+  margin: -4px 0 14px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.4;
+}
+
+.review-server-status.error-message {
+  color: var(--danger);
+}
+
+.review-suggestion {
+  display: grid;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid rgba(54, 89, 227, 0.2);
+  border-radius: var(--radius-small);
+  background: rgba(54, 89, 227, 0.06);
+}
+
+.review-suggestion strong {
+  color: var(--primary);
+  font-size: 0.9rem;
+}
+
+.review-suggestion span {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.review-suggestion p {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
