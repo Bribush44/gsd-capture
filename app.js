@@ -12,6 +12,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     "User.Read",
     "Tasks.ReadWrite",
   ];
+  const MICROSOFT_REVIEW_LIST_NAME = "GSD Review";
 
   const captureForm = document.getElementById("captureForm");
   const taskInput = document.getElementById("taskInput");
@@ -74,6 +75,12 @@ document.addEventListener("DOMContentLoaded", async function () {
   );
   const microsoftTestTaskMessage = document.getElementById(
     "microsoftTestTaskMessage"
+  );
+  const microsoftRoutingModeSelect = document.getElementById(
+    "microsoftRoutingMode"
+  );
+  const microsoftRoutingMessage = document.getElementById(
+    "microsoftRoutingMessage"
   );
 
   const voiceButton = document.getElementById("voiceButton");
@@ -175,6 +182,13 @@ document.addEventListener("DOMContentLoaded", async function () {
       createMicrosoftTestTaskButton.addEventListener(
         "click",
         createMicrosoftTestTask
+      );
+    }
+
+    if (microsoftRoutingModeSelect) {
+      microsoftRoutingModeSelect.addEventListener(
+        "change",
+        saveMicrosoftRoutingMode
       );
     }
   }
@@ -616,10 +630,262 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
 
     setMicrosoftTestTaskMessage(
-      "Approved captures will sync automatically to " +
+      "Every capture will sync to Microsoft To Do. Unclear items go to GSD Review until you approve them. Approved items use " +
         settings.microsoftListName +
-        ". You can still use the test button to verify the connection."
+        " or an AI-routed list."
     );
+  }
+
+  function saveMicrosoftRoutingMode() {
+    if (!microsoftRoutingModeSelect) {
+      return;
+    }
+
+    settings.aiListRouting = microsoftRoutingModeSelect.value || "ask";
+
+    localStorage.setItem(
+      SETTINGS_KEY,
+      JSON.stringify(settings)
+    );
+
+    updateMicrosoftRoutingMessage();
+  }
+
+  function updateMicrosoftRoutingMessage() {
+    if (!microsoftRoutingMessage) {
+      return;
+    }
+
+    const mode = settings.aiListRouting || "ask";
+
+    if (mode === "automatic") {
+      microsoftRoutingMessage.textContent =
+        "AI categories will automatically create and use matching To Do lists.";
+      return;
+    }
+
+    if (mode === "selected-only") {
+      microsoftRoutingMessage.textContent =
+        "Every capture will use the selected destination list.";
+      return;
+    }
+
+    microsoftRoutingMessage.textContent =
+      "Every unclear capture goes to GSD Review. When an approved AI category has no matching list, GSD Capture will ask before creating it.";
+  }
+
+  function normalizeMicrosoftListName(value) {
+    return String(value || "")
+      .trim()
+      .toLocaleLowerCase();
+  }
+
+  function getSuggestedMicrosoftListName(task) {
+    const category = String(
+      task && task.category ? task.category : ""
+    ).trim();
+
+    if (!category || category.toLocaleLowerCase() === "general") {
+      return "";
+    }
+
+    return category.slice(0, 80);
+  }
+
+  function findMicrosoftListByName(displayName) {
+    const normalizedName = normalizeMicrosoftListName(displayName);
+
+    return microsoftTodoLists.find(function (list) {
+      return (
+        normalizeMicrosoftListName(list.displayName) === normalizedName
+      );
+    });
+  }
+
+  async function ensureMicrosoftTodoListsForRouting(accessToken) {
+    if (microsoftTodoLists.length > 0) {
+      return microsoftTodoLists;
+    }
+
+    const response = await fetch(
+      "https://graph.microsoft.com/v1.0/me/todo/lists",
+      {
+        headers: {
+          Authorization: "Bearer " + accessToken,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    const data = await response.json().catch(function () {
+      return null;
+    });
+
+    if (!response.ok) {
+      const graphMessage =
+        data && data.error && data.error.message
+          ? data.error.message
+          : "Microsoft Graph returned " + response.status + ".";
+
+      throw new Error(graphMessage);
+    }
+
+    microsoftTodoLists =
+      data && Array.isArray(data.value) ? data.value.slice() : [];
+
+    microsoftTodoLists.sort(function (first, second) {
+      return String(first.displayName || "").localeCompare(
+        String(second.displayName || "")
+      );
+    });
+
+    return microsoftTodoLists;
+  }
+
+  async function createMicrosoftTodoList(displayName, accessToken) {
+    const response = await fetch(
+      "https://graph.microsoft.com/v1.0/me/todo/lists",
+      {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + accessToken,
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          displayName: displayName,
+        }),
+      }
+    );
+
+    const data = await response.json().catch(function () {
+      return null;
+    });
+
+    if (!response.ok) {
+      const graphMessage =
+        data && data.error && data.error.message
+          ? data.error.message
+          : "Microsoft Graph returned " + response.status + ".";
+
+      throw new Error(graphMessage);
+    }
+
+    if (!data || !data.id) {
+      throw new Error(
+        "Microsoft To Do did not return a list ID."
+      );
+    }
+
+    microsoftTodoLists.push(data);
+    microsoftTodoLists.sort(function (first, second) {
+      return String(first.displayName || "").localeCompare(
+        String(second.displayName || "")
+      );
+    });
+
+    return data;
+  }
+
+  async function getOrCreateMicrosoftListByName(displayName, accessToken) {
+    await ensureMicrosoftTodoListsForRouting(accessToken);
+
+    let matchingList = findMicrosoftListByName(displayName);
+
+    if (!matchingList) {
+      matchingList = await createMicrosoftTodoList(
+        displayName,
+        accessToken
+      );
+    }
+
+    return matchingList;
+  }
+
+  async function routeTaskToMicrosoftList(task, accessToken, options) {
+    const routeOptions = options || {};
+    const routeAsApproved = Boolean(routeOptions.routeAsApproved);
+
+    if (task.microsoftListId && !routeAsApproved) {
+      return { listId: task.microsoftListId, created: false };
+    }
+
+    if (task.needsReview && !routeAsApproved) {
+      const reviewList = await getOrCreateMicrosoftListByName(
+        MICROSOFT_REVIEW_LIST_NAME,
+        accessToken
+      );
+
+      task.microsoftListId = reviewList.id;
+      task.microsoftListName =
+        reviewList.displayName || MICROSOFT_REVIEW_LIST_NAME;
+      task.microsoftReviewListId = reviewList.id;
+      task.microsoftReviewListName =
+        reviewList.displayName || MICROSOFT_REVIEW_LIST_NAME;
+
+      return {
+        listId: reviewList.id,
+        created: false,
+        reviewList: true,
+      };
+    }
+
+    const selectedListId = settings.microsoftListId || "";
+    const selectedListName =
+      settings.microsoftListName || "Microsoft To Do";
+    const mode = settings.aiListRouting || "ask";
+    const suggestedListName = getSuggestedMicrosoftListName(task);
+
+    if (mode === "selected-only" || !suggestedListName) {
+      task.microsoftListId = selectedListId;
+      task.microsoftListName = selectedListName;
+      return { listId: selectedListId, created: false };
+    }
+
+    try {
+      await ensureMicrosoftTodoListsForRouting(accessToken);
+
+      let matchingList = findMicrosoftListByName(suggestedListName);
+
+      if (!matchingList) {
+        let shouldCreate = mode === "automatic";
+
+        if (mode === "ask") {
+          shouldCreate = window.confirm(
+            'AI suggests the Microsoft To Do list "' +
+              suggestedListName +
+              '". Create it and add this task there?'
+          );
+        }
+
+        if (shouldCreate) {
+          matchingList = await createMicrosoftTodoList(
+            suggestedListName,
+            accessToken
+          );
+          task.microsoftListCreatedByAi = true;
+        }
+      }
+
+      if (matchingList) {
+        task.microsoftListId = matchingList.id;
+        task.microsoftListName =
+          matchingList.displayName || suggestedListName;
+        return {
+          listId: matchingList.id,
+          created: Boolean(task.microsoftListCreatedByAi),
+        };
+      }
+    } catch (error) {
+      console.warn(
+        "AI list routing could not finish; using the selected list instead:",
+        error
+      );
+    }
+
+    task.microsoftListId = selectedListId;
+    task.microsoftListName = selectedListName;
+    return { listId: selectedListId, created: false };
   }
 
   async function createMicrosoftTestTask() {
@@ -769,13 +1035,6 @@ document.addEventListener("DOMContentLoaded", async function () {
       return { status: "synced", taskId: task.microsoftTaskId };
     }
 
-    if (task.needsReview) {
-      task.microsoftSyncStatus = "waiting-review";
-      saveTasks();
-      renderEverything();
-      return { status: "waiting-review" };
-    }
-
     if (!canSyncTaskToMicrosoft(task)) {
       task.microsoftSyncStatus = "local-only";
       task.microsoftSyncError =
@@ -791,8 +1050,8 @@ document.addEventListener("DOMContentLoaded", async function () {
 
     task.microsoftSyncStatus = "syncing";
     task.microsoftSyncError = "";
-    task.microsoftListId = getMicrosoftListIdForTask(task);
-    task.microsoftListName = getMicrosoftListNameForTask(task);
+    task.microsoftListId = task.microsoftListId || "";
+    task.microsoftListName = task.microsoftListName || "";
     task.microsoftSyncAttemptedAt = new Date().toISOString();
     saveTasks();
     renderEverything();
@@ -806,6 +1065,10 @@ document.addEventListener("DOMContentLoaded", async function () {
         renderEverything();
         return { status: "interaction-required" };
       }
+
+      await routeTaskToMicrosoftList(task, accessToken);
+      saveTasks();
+      renderEverything();
 
       if (hadPreviousAttempt) {
         const existingTask =
@@ -847,7 +1110,7 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
   }
 
-  async function createMicrosoftTask(task, accessToken) {
+  async function createMicrosoftTask(task, accessToken, listIdOverride) {
     const controller = new AbortController();
     const timeoutId = window.setTimeout(function () {
       controller.abort();
@@ -858,7 +1121,9 @@ document.addEventListener("DOMContentLoaded", async function () {
     try {
       response = await fetch(
         "https://graph.microsoft.com/v1.0/me/todo/lists/" +
-          encodeURIComponent(getMicrosoftListIdForTask(task)) +
+          encodeURIComponent(
+            listIdOverride || getMicrosoftListIdForTask(task)
+          ) +
           "/tasks",
         {
           method: "POST",
@@ -910,6 +1175,10 @@ document.addEventListener("DOMContentLoaded", async function () {
 
     notes.push("Category: " + (task.category || "General"));
     notes.push("Priority: " + (task.priority || "Normal"));
+
+    if (task.needsReview) {
+      notes.push("Review status: Needs review in GSD Capture");
+    }
 
     if (task.context) {
       notes.push("Context: " + task.context);
@@ -970,10 +1239,12 @@ document.addEventListener("DOMContentLoaded", async function () {
     return "GSD Capture ID: " + task.id;
   }
 
-  async function findExistingMicrosoftTask(task, accessToken) {
+  async function findExistingMicrosoftTask(task, accessToken, listIdOverride) {
     let nextUrl =
       "https://graph.microsoft.com/v1.0/me/todo/lists/" +
-      encodeURIComponent(getMicrosoftListIdForTask(task)) +
+      encodeURIComponent(
+        listIdOverride || getMicrosoftListIdForTask(task)
+      ) +
       "/tasks";
     const marker = getMicrosoftTaskMarker(task);
     let pageCount = 0;
@@ -1039,6 +1310,14 @@ document.addEventListener("DOMContentLoaded", async function () {
     task.microsoftTaskId = microsoftTask.id;
     task.microsoftListId = getMicrosoftListIdForTask(task);
     task.microsoftListName = getMicrosoftListNameForTask(task);
+
+    if (task.needsReview) {
+      task.microsoftReviewTaskId = microsoftTask.id;
+      task.microsoftReviewListId = task.microsoftListId;
+      task.microsoftReviewListName =
+        task.microsoftListName || MICROSOFT_REVIEW_LIST_NAME;
+    }
+
     task.microsoftSyncStatus = "synced";
     task.microsoftSyncError = "";
     task.microsoftSyncedAt = new Date().toISOString();
@@ -1046,7 +1325,164 @@ document.addEventListener("DOMContentLoaded", async function () {
     renderEverything();
   }
 
+  async function deleteMicrosoftTaskFromList(listId, taskId, accessToken) {
+    const response = await fetch(
+      "https://graph.microsoft.com/v1.0/me/todo/lists/" +
+        encodeURIComponent(listId) +
+        "/tasks/" +
+        encodeURIComponent(taskId),
+      {
+        method: "DELETE",
+        headers: {
+          Authorization: "Bearer " + accessToken,
+        },
+      }
+    );
+
+    if (!response.ok && response.status !== 404) {
+      const data = await response.json().catch(function () {
+        return null;
+      });
+      const graphMessage =
+        data && data.error && data.error.message
+          ? data.error.message
+          : "Microsoft Graph returned " + response.status + ".";
+      throw new Error(graphMessage);
+    }
+  }
+
+  async function moveReviewedTaskToDestination(task) {
+    if (!canSyncTaskToMicrosoft(task)) {
+      task.microsoftSyncStatus = "failed";
+      task.microsoftSyncError =
+        "Connect Microsoft To Do and select a destination list before approving this item.";
+      saveTasks();
+      renderEverything();
+      return { status: "failed" };
+    }
+
+    task.microsoftSyncStatus = "moving";
+    task.microsoftSyncError = "";
+    saveTasks();
+    renderEverything();
+
+    try {
+      const accessToken = await acquireMicrosoftAccessToken();
+
+      if (!accessToken) {
+        task.microsoftSyncStatus = "pending";
+        saveTasks();
+        renderEverything();
+        return { status: "interaction-required" };
+      }
+
+      const reviewTaskId =
+        task.microsoftReviewTaskId || task.microsoftTaskId;
+      const reviewListId =
+        task.microsoftReviewListId || task.microsoftListId;
+
+      if (!reviewTaskId || !reviewListId) {
+        task.needsReview = false;
+        task.microsoftTaskId = "";
+        task.microsoftListId = "";
+        task.microsoftListName = "";
+        task.microsoftSyncStatus = "pending";
+        saveTasks();
+        renderEverything();
+        return await syncTaskToMicrosoft(task);
+      }
+
+      if (!task.microsoftMoveTargetTaskId) {
+        const originalNeedsReview = task.needsReview;
+        const originalTaskId = task.microsoftTaskId;
+        const originalListId = task.microsoftListId;
+        const originalListName = task.microsoftListName;
+
+        task.needsReview = false;
+        task.microsoftTaskId = "";
+        task.microsoftListId = "";
+        task.microsoftListName = "";
+
+        await routeTaskToMicrosoftList(task, accessToken, {
+          routeAsApproved: true,
+        });
+
+        const destinationListId = task.microsoftListId;
+        const destinationListName = task.microsoftListName;
+        const existingTask = await findExistingMicrosoftTask(
+          task,
+          accessToken,
+          destinationListId
+        );
+        const destinationTask =
+          existingTask && existingTask.id
+            ? existingTask
+            : await createMicrosoftTask(
+                task,
+                accessToken,
+                destinationListId
+              );
+
+        task.microsoftMoveTargetTaskId = destinationTask.id;
+        task.microsoftMoveTargetListId = destinationListId;
+        task.microsoftMoveTargetListName = destinationListName;
+
+        task.needsReview = originalNeedsReview;
+        task.microsoftTaskId = originalTaskId;
+        task.microsoftListId = originalListId;
+        task.microsoftListName = originalListName;
+        saveTasks();
+      }
+
+      await deleteMicrosoftTaskFromList(
+        reviewListId,
+        reviewTaskId,
+        accessToken
+      );
+
+      task.needsReview = false;
+      task.microsoftTaskId = task.microsoftMoveTargetTaskId;
+      task.microsoftListId = task.microsoftMoveTargetListId;
+      task.microsoftListName = task.microsoftMoveTargetListName;
+      task.microsoftSyncStatus = "synced";
+      task.microsoftSyncError = "";
+      task.microsoftSyncedAt = new Date().toISOString();
+      task.microsoftReviewTaskId = "";
+      task.microsoftReviewListId = "";
+      task.microsoftReviewListName = "";
+      task.microsoftMoveTargetTaskId = "";
+      task.microsoftMoveTargetListId = "";
+      task.microsoftMoveTargetListName = "";
+      saveTasks();
+      renderEverything();
+
+      return { status: "synced", taskId: task.microsoftTaskId };
+    } catch (error) {
+      console.error("Moving reviewed Microsoft To Do task failed:", error);
+      task.microsoftSyncStatus = "failed";
+      task.microsoftSyncError =
+        error && error.message
+          ? error.message
+          : "The reviewed task could not be moved.";
+      saveTasks();
+      renderEverything();
+      return { status: "failed", error: error };
+    }
+  }
+
   async function approveTaskAndSync(task) {
+    const hasReviewTask = Boolean(
+      task.microsoftReviewTaskId ||
+        (task.microsoftTaskId &&
+          normalizeMicrosoftListName(task.microsoftListName) ===
+            normalizeMicrosoftListName(MICROSOFT_REVIEW_LIST_NAME))
+    );
+
+    if (hasReviewTask) {
+      await moveReviewedTaskToDestination(task);
+      return;
+    }
+
     task.needsReview = false;
     task.microsoftSyncStatus = "pending";
     saveTasks();
@@ -1213,14 +1649,16 @@ document.addEventListener("DOMContentLoaded", async function () {
         microsoftTaskId: "",
         microsoftListId: "",
         microsoftListName: "",
-        microsoftSyncStatus:
-          typeof analysis.needsReview === "boolean" &&
-          analysis.needsReview === false
-            ? "pending"
-            : "waiting-review",
+        microsoftSyncStatus: "pending",
         microsoftSyncError: "",
         microsoftSyncAttemptedAt: "",
         microsoftSyncedAt: "",
+        microsoftReviewTaskId: "",
+        microsoftReviewListId: "",
+        microsoftReviewListName: "",
+        microsoftMoveTargetTaskId: "",
+        microsoftMoveTargetListId: "",
+        microsoftMoveTargetListName: "",
       };
 
       tasks.unshift(newTask);
@@ -1237,14 +1675,6 @@ document.addEventListener("DOMContentLoaded", async function () {
           ? "Captured successfully using local sorting."
           : "Captured offline using local sorting.";
 
-      if (newTask.needsReview) {
-        showCaptureMessage(
-          baseMessage +
-            " Approve it before sending it to Microsoft To Do."
-        );
-        return;
-      }
-
       if (!canSyncTaskToMicrosoft(newTask)) {
         newTask.microsoftSyncStatus = "local-only";
         saveTasks();
@@ -1252,7 +1682,9 @@ document.addEventListener("DOMContentLoaded", async function () {
 
         showCaptureMessage(
           baseMessage +
-            " Saved locally. Connect Microsoft To Do and select a list to send it later."
+            (newTask.needsReview
+              ? " This item needs review and was saved locally. Connect Microsoft To Do to place it in GSD Review."
+              : " Saved locally. Connect Microsoft To Do and select a list to send it later.")
         );
         return;
       }
@@ -1266,11 +1698,13 @@ document.addEventListener("DOMContentLoaded", async function () {
       if (syncResult.status === "synced") {
         showCaptureMessage(
           baseMessage +
-            " Added to " +
-            (newTask.microsoftListName ||
-              settings.microsoftListName ||
-              "Microsoft To Do") +
-            "."
+            (newTask.needsReview
+              ? " Added to GSD Review in Microsoft To Do. Approve it in GSD Capture to move it to the correct list."
+              : " Added to " +
+                (newTask.microsoftListName ||
+                  settings.microsoftListName ||
+                  "Microsoft To Do") +
+                ".")
         );
       } else if (syncResult.status === "interaction-required") {
         showCaptureMessage(
@@ -1691,9 +2125,9 @@ document.addEventListener("DOMContentLoaded", async function () {
       );
 
       if (
-        !task.needsReview &&
         !task.microsoftTaskId &&
-        task.microsoftSyncStatus !== "syncing"
+        task.microsoftSyncStatus !== "syncing" &&
+        task.microsoftSyncStatus !== "moving"
       ) {
         actions.appendChild(
           createButton(
@@ -1757,20 +2191,40 @@ document.addEventListener("DOMContentLoaded", async function () {
   }
 
   function getMicrosoftSyncLabel(task) {
-    if (task.microsoftTaskId || task.microsoftSyncStatus === "synced") {
-      return "To Do: Synced";
+    if (task.microsoftSyncStatus === "moving") {
+      return "To Do: Moving to approved list...";
     }
 
-    if (task.needsReview || task.microsoftSyncStatus === "waiting-review") {
-      return "To Do: Waiting for review";
+    if (
+      task.needsReview &&
+      (task.microsoftReviewTaskId ||
+        task.microsoftTaskId ||
+        task.microsoftSyncStatus === "synced")
+    ) {
+      return "To Do: Needs review → " +
+        (task.microsoftReviewListName ||
+          task.microsoftListName ||
+          MICROSOFT_REVIEW_LIST_NAME);
+    }
+
+    if (task.microsoftTaskId || task.microsoftSyncStatus === "synced") {
+      return task.microsoftListName
+        ? "To Do: Synced → " + task.microsoftListName
+        : "To Do: Synced";
     }
 
     if (task.microsoftSyncStatus === "syncing") {
-      return "To Do: Sending...";
+      return task.needsReview
+        ? "To Do: Sending to GSD Review..."
+        : "To Do: Sending...";
     }
 
     if (task.microsoftSyncStatus === "failed") {
       return "To Do: Retry needed";
+    }
+
+    if (task.needsReview) {
+      return "To Do: Review pending locally";
     }
 
     return "To Do: Local only";
@@ -1881,6 +2335,9 @@ document.addEventListener("DOMContentLoaded", async function () {
       calendarSuggestions: calendarToggle
         ? calendarToggle.checked
         : true,
+      aiListRouting: microsoftRoutingModeSelect
+        ? microsoftRoutingModeSelect.value
+        : settings.aiListRouting || "ask",
       microsoftListId: settings.microsoftListId || "",
       microsoftListName: settings.microsoftListName || "",
     };
@@ -1916,6 +2373,13 @@ document.addEventListener("DOMContentLoaded", async function () {
       calendarToggle.checked =
         settings.calendarSuggestions !== false;
     }
+
+    if (microsoftRoutingModeSelect) {
+      microsoftRoutingModeSelect.value =
+        settings.aiListRouting || "ask";
+    }
+
+    updateMicrosoftRoutingMessage();
   }
 
   function startVoiceCapture() {
@@ -1993,6 +2457,7 @@ document.addEventListener("DOMContentLoaded", async function () {
           defaultList: "General",
           aiSorting: true,
           calendarSuggestions: true,
+          aiListRouting: "ask",
           microsoftListId: "",
           microsoftListName: "",
         };
@@ -2005,6 +2470,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         defaultList: "General",
         aiSorting: true,
         calendarSuggestions: true,
+        aiListRouting: "ask",
         microsoftListId: "",
         microsoftListName: "",
         ...(parsed && typeof parsed === "object" ? parsed : {}),
@@ -2015,6 +2481,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         defaultList: "General",
         aiSorting: true,
         calendarSuggestions: true,
+        aiListRouting: "ask",
         microsoftListId: "",
         microsoftListName: "",
       };

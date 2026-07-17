@@ -233,8 +233,20 @@
                 Load your lists and choose a destination before creating a test task.
               </p>
 
+              <label for="microsoftRoutingMode">AI list routing</label>
+
+              <select id="microsoftRoutingMode">
+                <option value="ask">Ask before creating a suggested list</option>
+                <option value="selected-only">Always use the selected list</option>
+                <option value="automatic">Automatically create suggested lists</option>
+              </select>
+
+              <p id="microsoftRoutingMessage" class="microsoft-list-message" aria-live="polite">
+                Every unclear capture goes to GSD Review. When an approved AI category has no matching list, GSD Capture will ask before creating it.
+              </p>
+
               <p class="microsoft-list-message">
-                Approved captures sync automatically. Items that need review stay local until you approve them.
+                Every capture syncs to Microsoft To Do. Items needing review go to GSD Review, then move to the approved list when you approve them here.
               </p>
             </div>
 
@@ -316,6 +328,6 @@
   </div>
 
   <script src="vendor/msal-browser.min.js?v=1"></script>
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>
