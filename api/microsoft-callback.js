@@ -1,8 +1,19 @@
 "use strict";
 
-const STATE_PREFIX = "gsd:siri:microsoft:oauth-state:";
-const CONNECTION_KEY = "gsd:siri:microsoft:connection";
-const MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/common";
+import {
+  LEGACY_CONNECTION_KEY,
+  SETUP_PREFIX,
+  SETUP_RESULT_PREFIX,
+  STATE_PREFIX,
+  getUserConnectionKey,
+  redisCommand,
+  requireEnvironment,
+  sanitizeSetupId,
+} from "../lib/voice-user-store.js";
+
+const MICROSOFT_AUTHORITY =
+  "https://login.microsoftonline.com/common";
+
 const MICROSOFT_SCOPES = [
   "openid",
   "profile",
@@ -11,10 +22,21 @@ const MICROSOFT_SCOPES = [
   "Tasks.ReadWrite",
 ];
 
-export default async function handler(request, response) {
+export default async function handler(
+  request,
+  response
+) {
+  response.setHeader(
+    "Cache-Control",
+    "no-store"
+  );
+
   if (request.method !== "GET") {
     response.setHeader("Allow", "GET");
-    return response.status(405).send("Only GET requests are allowed.");
+
+    return response
+      .status(405)
+      .send("Only GET requests are allowed.");
   }
 
   try {
@@ -30,115 +52,342 @@ export default async function handler(request, response) {
 
     if (query.error) {
       const description = String(
-        query.error_description || query.error || "Microsoft sign-in was cancelled."
+        query.error_description ||
+          query.error ||
+          "Microsoft sign-in was cancelled."
       );
-      return sendHtml(response, false, description);
+
+      return sendHtml(
+        response,
+        false,
+        description,
+        "/"
+      );
     }
 
-    const code = typeof query.code === "string" ? query.code : "";
-    const state = typeof query.state === "string" ? query.state : "";
+    const code =
+      typeof query.code === "string"
+        ? query.code
+        : "";
+
+    const state =
+      typeof query.state === "string"
+        ? query.state
+        : "";
 
     if (!code || !state) {
       return sendHtml(
         response,
         false,
-        "Microsoft did not return the required authorization information."
+        "Microsoft did not return the required authorization information.",
+        "/"
       );
     }
 
-    const storedState = await redisCommand(["GETDEL", STATE_PREFIX + state]);
+    const storedState = await redisCommand([
+      "GET",
+      STATE_PREFIX + state,
+    ]);
 
-    if (storedState !== "pending") {
+    if (!storedState) {
       return sendHtml(
         response,
         false,
-        "This Microsoft connection link expired or was already used. Start the connection again."
+        "This Microsoft connection link expired or was already used. Start the connection again.",
+        "/"
       );
     }
 
-    const tokenData = await exchangeAuthorizationCode(code);
+    await redisCommand([
+      "DEL",
+      STATE_PREFIX + state,
+    ]);
 
-    if (!tokenData.refresh_token || !tokenData.access_token) {
-      throw new Error("Microsoft did not return the required tokens.");
+    const stateRecord =
+      parseStateRecord(storedState);
+
+    if (!stateRecord) {
+      return sendHtml(
+        response,
+        false,
+        "The Microsoft connection information was invalid. Start the connection again.",
+        "/"
+      );
     }
 
-    const profile = await readMicrosoftProfile(tokenData.access_token);
+    const tokenData =
+      await exchangeAuthorizationCode(code);
+
+    if (
+      !tokenData.access_token ||
+      !tokenData.refresh_token
+    ) {
+      throw new Error(
+        "Microsoft did not return the required access and refresh tokens."
+      );
+    }
+
+    const profile =
+      await readMicrosoftProfile(
+        tokenData.access_token
+      );
+
+    if (!profile.id) {
+      throw new Error(
+        "The Microsoft profile did not include a user ID."
+      );
+    }
+
     const connection = {
-      refreshToken: tokenData.refresh_token,
-      displayName: profile.displayName || "Microsoft user",
-      email: profile.mail || profile.userPrincipalName || "",
-      microsoftUserId: profile.id || "",
-      connectedAt: new Date().toISOString(),
-      scope: tokenData.scope || MICROSOFT_SCOPES.join(" "),
+      refreshToken:
+        tokenData.refresh_token,
+      displayName:
+        profile.displayName ||
+        "Microsoft user",
+      email:
+        profile.mail ||
+        profile.userPrincipalName ||
+        "",
+      microsoftUserId:
+        profile.id,
+      connectedAt:
+        new Date().toISOString(),
+      scope:
+        tokenData.scope ||
+        MICROSOFT_SCOPES.join(" "),
     };
 
-    await redisCommand(["SET", CONNECTION_KEY, JSON.stringify(connection)]);
+    if (stateRecord.mode === "per-user") {
+      return completePerUserSetup(
+        response,
+        stateRecord,
+        connection
+      );
+    }
+
+    await redisCommand([
+      "SET",
+      LEGACY_CONNECTION_KEY,
+      JSON.stringify(connection),
+    ]);
 
     return sendHtml(
       response,
       true,
-      "Siri background capture is connected to " + connection.displayName + "."
+      "Siri background capture is connected to " +
+        connection.displayName +
+        ".",
+      "/"
     );
   } catch (error) {
-    console.error("Microsoft callback failed:", error);
+    console.error(
+      "Microsoft callback failed:",
+      error
+    );
+
     return sendHtml(
       response,
       false,
       "The Microsoft connection could not be completed. " +
-        (error && error.message ? error.message : "")
+        (
+          error && error.message
+            ? error.message
+            : "Please try again."
+        ),
+      "/"
     );
   }
 }
 
-async function exchangeAuthorizationCode(code) {
+async function completePerUserSetup(
+  response,
+  stateRecord,
+  connection
+) {
+  const setupId = sanitizeSetupId(
+    stateRecord.setupId
+  );
+
+  if (!setupId) {
+    return sendHtml(
+      response,
+      false,
+      "The Voice Capture setup ID was invalid.",
+      "/"
+    );
+  }
+
+  const storedSetup = await redisCommand([
+    "GET",
+    SETUP_PREFIX + setupId,
+  ]);
+
+  if (!storedSetup) {
+    return sendHtml(
+      response,
+      false,
+      "This Voice Capture setup expired. Return to GSD Capture and start again.",
+      "/"
+    );
+  }
+
+  const setupRecord =
+    JSON.parse(storedSetup);
+
+  if (
+    connection.microsoftUserId !==
+    setupRecord.microsoftUserId
+  ) {
+    return sendHtml(
+      response,
+      false,
+      "The Microsoft account did not match the account that started Voice Capture setup.",
+      "/"
+    );
+  }
+
+  const connectionKey =
+    getUserConnectionKey(
+      setupRecord.voiceKeyHash
+    );
+
+  await redisCommand([
+    "SET",
+    connectionKey,
+    JSON.stringify(connection),
+  ]);
+
+  const setupResult = {
+    ok: true,
+    complete: true,
+    setupId,
+    displayName:
+      connection.displayName,
+    email:
+      connection.email,
+    connectedAt:
+      connection.connectedAt,
+  };
+
+  await redisCommand([
+    "SET",
+    SETUP_RESULT_PREFIX + setupId,
+    JSON.stringify(setupResult),
+    "EX",
+    3600,
+  ]);
+
+  await redisCommand([
+    "DEL",
+    SETUP_PREFIX + setupId,
+  ]);
+
+  return sendHtml(
+    response,
+    true,
+    "Voice Capture is connected to " +
+      connection.displayName +
+      ". Return to GSD Capture to install the shortcut.",
+    "/?voiceSetup=complete&setupId=" +
+      encodeURIComponent(setupId)
+  );
+}
+
+function parseStateRecord(value) {
+  try {
+    const parsed = JSON.parse(value);
+
+    if (
+      !parsed ||
+      typeof parsed !== "object"
+    ) {
+      return null;
+    }
+
+    if (
+      parsed.mode !== "legacy" &&
+      parsed.mode !== "per-user"
+    ) {
+      return null;
+    }
+
+    return parsed;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function exchangeAuthorizationCode(
+  code
+) {
   const tokenResponse = await fetch(
-    MICROSOFT_AUTHORITY + "/oauth2/v2.0/token",
+    MICROSOFT_AUTHORITY +
+      "/oauth2/v2.0/token",
     {
       method: "POST",
       headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
+        "Content-Type":
+          "application/x-www-form-urlencoded",
       },
       body: new URLSearchParams({
-        client_id: process.env.MICROSOFT_CLIENT_ID,
-        client_secret: process.env.MICROSOFT_CLIENT_SECRET,
-        grant_type: "authorization_code",
-        code: code,
-        redirect_uri: process.env.MICROSOFT_REDIRECT_URI,
-        scope: MICROSOFT_SCOPES.join(" "),
+        client_id:
+          process.env.MICROSOFT_CLIENT_ID,
+        client_secret:
+          process.env.MICROSOFT_CLIENT_SECRET,
+        grant_type:
+          "authorization_code",
+        code,
+        redirect_uri:
+          process.env.MICROSOFT_REDIRECT_URI,
+        scope:
+          MICROSOFT_SCOPES.join(" "),
       }).toString(),
     }
   );
 
-  const tokenData = await tokenResponse.json().catch(function () {
-    return null;
-  });
+  const tokenData = await tokenResponse
+    .json()
+    .catch(function () {
+      return null;
+    });
 
   if (!tokenResponse.ok) {
-    const message =
-      tokenData && tokenData.error_description
+    throw new Error(
+      tokenData &&
+        tokenData.error_description
         ? tokenData.error_description
-        : "Microsoft token exchange failed.";
-    throw new Error(message);
+        : "Microsoft token exchange failed."
+    );
   }
 
   return tokenData || {};
 }
 
-async function readMicrosoftProfile(accessToken) {
-  const profileResponse = await fetch("https://graph.microsoft.com/v1.0/me", {
-    headers: {
-      Authorization: "Bearer " + accessToken,
-      Accept: "application/json",
-    },
-  });
+async function readMicrosoftProfile(
+  accessToken
+) {
+  const profileResponse = await fetch(
+    "https://graph.microsoft.com/v1.0/me?$select=id,displayName,mail,userPrincipalName",
+    {
+      headers: {
+        Authorization:
+          "Bearer " + accessToken,
+        Accept: "application/json",
+      },
+    }
+  );
 
-  const profile = await profileResponse.json().catch(function () {
-    return null;
-  });
+  const profile = await profileResponse
+    .json()
+    .catch(function () {
+      return null;
+    });
 
   if (!profileResponse.ok) {
     throw new Error(
-      profile && profile.error && profile.error.message
+      profile &&
+        profile.error &&
+        profile.error.message
         ? profile.error.message
         : "The Microsoft profile could not be read."
     );
@@ -147,80 +396,69 @@ async function readMicrosoftProfile(accessToken) {
   return profile || {};
 }
 
-function sendHtml(response, success, message) {
+function sendHtml(
+  response,
+  success,
+  message,
+  returnPath
+) {
   const heading = success
-    ? "Siri Capture Connected"
-    : "Siri Capture Connection Failed";
-  const safeMessage = escapeHtml(message || "");
-  const accent = success ? "#166534" : "#991b1b";
-  const background = success ? "#f0fdf4" : "#fef2f2";
+    ? "Voice Capture Connected"
+    : "Voice Capture Connection Failed";
 
-  response.setHeader("Cache-Control", "no-store");
-  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  const accent = success
+    ? "#166534"
+    : "#991b1b";
 
-  return response.status(success ? 200 : 400).send(
-    "<!doctype html>" +
-      '<html lang="en"><head><meta charset="utf-8">' +
-      '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-      "<title>" +
-      heading +
-      "</title>" +
-      "<style>body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;" +
-      "margin:0;padding:32px;background:#f8fafc;color:#0f172a}" +
-      ".card{max-width:640px;margin:10vh auto;background:white;border-radius:20px;" +
-      "padding:28px;box-shadow:0 16px 45px rgba(15,23,42,.12)}" +
-      "h1{color:" +
-      accent +
-      ";margin-top:0}.message{background:" +
-      background +
-      ";padding:16px;border-radius:12px;line-height:1.5}" +
-      "a{display:inline-block;margin-top:20px;color:#1d4ed8;font-weight:700}</style>" +
-      "</head><body><main class=\"card\"><h1>" +
-      heading +
-      "</h1><div class=\"message\">" +
-      safeMessage +
-      "</div><a href=\"/\">Return to GSD Capture</a></main></body></html>"
+  const background = success
+    ? "#f0fdf4"
+    : "#fef2f2";
+
+  response.setHeader(
+    "Content-Type",
+    "text/html; charset=utf-8"
   );
+
+  return response
+    .status(success ? 200 : 400)
+    .send(
+      "<!doctype html>" +
+        '<html lang="en">' +
+        "<head>" +
+        '<meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+        "<title>" +
+        escapeHtml(heading) +
+        "</title>" +
+        "</head>" +
+        '<body style="font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;' +
+        "margin:0;padding:32px;background:" +
+        background +
+        ';color:#172033">' +
+        '<main style="max-width:620px;margin:0 auto;background:white;padding:28px;' +
+        'border-radius:18px;box-shadow:0 12px 36px rgba(0,0,0,.08)">' +
+        '<h1 style="margin-top:0;color:' +
+        accent +
+        '">' +
+        escapeHtml(heading) +
+        "</h1>" +
+        "<p>" +
+        escapeHtml(message) +
+        "</p>" +
+        '<p><a href="' +
+        escapeHtml(returnPath || "/") +
+        '">Return to GSD Capture</a></p>' +
+        "</main>" +
+        "</body>" +
+        "</html>"
+    );
 }
 
 function escapeHtml(value) {
   return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function requireEnvironment(names) {
-  const missing = names.filter(function (name) {
-    return !process.env[name];
-  });
-
-  if (missing.length > 0) {
-    throw new Error("Missing environment variables: " + missing.join(", "));
-  }
-}
-
-async function redisCommand(command) {
-  const redisResponse = await fetch(process.env.KV_REST_API_URL, {
-    method: "POST",
-    headers: {
-      Authorization: "Bearer " + process.env.KV_REST_API_TOKEN,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(command),
-  });
-
-  const data = await redisResponse.json().catch(function () {
-    return null;
-  });
-
-  if (!redisResponse.ok || !data || data.error) {
-    throw new Error(
-      data && data.error ? data.error : "Secure storage request failed."
-    );
-  }
-
-  return data.result;
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
 }
