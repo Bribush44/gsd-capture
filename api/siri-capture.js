@@ -1,8 +1,8 @@
 "use strict";
 
-import { timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 
-const CONNECTION_KEY = "gsd:siri:microsoft:connection";
+const CONNECTION_KEY = "gsd:siri:microsoft:connection"; const USER_CONNECTION_PREFIX = "gsd:siri:user:";
 const REQUEST_PREFIX = "gsd:siri:request:";
 const RATE_PREFIX = "gsd:siri:rate:";
 const MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/common";
@@ -36,12 +36,20 @@ message: "Capture is unavailable from this request. Please try again.",
       "OPENAI_API_KEY",
     ]);
 
-    const suppliedSecret = readSuppliedSecret(request);
+    const suppliedSecret =
+      readSuppliedSecret(request);
 
-    if (!safeSecretMatch(suppliedSecret, process.env.SIRI_CAPTURE_SECRET)) {
+    const captureIdentity =
+      await resolveCaptureIdentity(
+        suppliedSecret
+      );
+
+    if (!captureIdentity) {
       return response.status(401).json({
-        error: "The Siri capture key is invalid.",
-message: "Capture needs to be set up again. Please open GSD Capture.",
+        error:
+          "The Siri capture key is invalid.",
+        message:
+          "Capture needs to be set up again. Please open GSD Capture.",
       });
     }
 
@@ -64,12 +72,12 @@ message: "That task was too long. Please try a shorter capture.",
       });
     }
 
-    await enforceRateLimit(request);
+    await enforceRateLimit(request, captureIdentity.id);
 
     if (requestId) {
       const existingResult = await redisCommand([
         "GET",
-        REQUEST_PREFIX + requestId,
+        REQUEST_PREFIX + captureIdentity.id + ":" + requestId,
       ]);
 
       if (existingResult) {
@@ -79,7 +87,7 @@ message: "That task was too long. Please try a shorter capture.",
       }
     }
 
-    const connection = await readConnection();
+    const connection = await readConnection(captureIdentity);
 
     if (!connection || !connection.refreshToken) {
       return response.status(409).json({
@@ -96,7 +104,7 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
     if (tokenResult.refresh_token) {
       connection.refreshToken = tokenResult.refresh_token;
       connection.refreshedAt = new Date().toISOString();
-      await saveConnection(connection);
+      await saveConnection(connection, captureIdentity);
     }
 
     const classification = await classifyTask(text, currentDate);
@@ -133,7 +141,7 @@ message: "Microsoft To Do needs to be reconnected. Open GSD Capture and reconnec
     if (requestId) {
       await redisCommand([
         "SET",
-        REQUEST_PREFIX + requestId,
+        REQUEST_PREFIX + captureIdentity.id + ":" + requestId,
         JSON.stringify(result),
         "EX",
         604800,
@@ -201,6 +209,70 @@ function getFriendlyCaptureErrorMessage(message) {
   return "I could not save that task. Please try again.";
 }
 
+async function resolveCaptureIdentity(
+  suppliedSecret
+) {
+  if (
+    safeSecretMatch(
+      suppliedSecret,
+      process.env.SIRI_CAPTURE_SECRET
+    )
+  ) {
+    return {
+      id: "legacy",
+      connectionKey: CONNECTION_KEY,
+      connection: null,
+    };
+  }
+
+  const voiceKey =
+    String(suppliedSecret || "").trim();
+
+  if (
+    !/^gsvc_[A-Za-z0-9_-]{20,}$/.test(
+      voiceKey
+    )
+  ) {
+    return null;
+  }
+
+  const voiceKeyHash =
+    createHash("sha256")
+      .update(voiceKey)
+      .digest("hex");
+
+  const connectionKey =
+    USER_CONNECTION_PREFIX +
+    voiceKeyHash +
+    ":connection";
+
+  const storedConnection =
+    await redisCommand([
+      "GET",
+      connectionKey,
+    ]);
+
+  if (!storedConnection) {
+    return null;
+  }
+
+  try {
+    return {
+      id: voiceKeyHash.slice(0, 24),
+      connectionKey,
+      connection:
+        JSON.parse(storedConnection),
+    };
+  } catch (error) {
+    console.error(
+      "Stored Voice Capture connection was invalid:",
+      error
+    );
+
+    return null;
+  }
+}
+
 function parseRequestBody(value) {
   if (!value) {
     return {};
@@ -264,11 +336,11 @@ function sanitizeCurrentDate(value) {
     : new Date().toISOString().slice(0, 10);
 }
 
-async function enforceRateLimit(request) {
+async function enforceRateLimit(request, identityId) {
   const forwardedFor = String(request.headers["x-forwarded-for"] || "unknown");
   const ip = forwardedFor.split(",")[0].trim().replace(/[^A-Za-z0-9:._-]/g, "");
   const hour = new Date().toISOString().slice(0, 13);
-  const key = RATE_PREFIX + ip + ":" + hour;
+  const key = RATE_PREFIX + identityId + ":" + ip + ":" + hour;
   const count = Number(await redisCommand(["INCR", key]));
 
   if (count === 1) {
@@ -280,13 +352,35 @@ async function enforceRateLimit(request) {
   }
 }
 
-async function readConnection() {
-  const stored = await redisCommand(["GET", CONNECTION_KEY]);
-  return stored ? JSON.parse(stored) : null;
+async function readConnection(
+  captureIdentity
+) {
+  if (captureIdentity.connection) {
+    return captureIdentity.connection;
+  }
+
+  const storedConnection =
+    await redisCommand([
+      "GET",
+      captureIdentity.connectionKey,
+    ]);
+
+  return storedConnection
+    ? JSON.parse(storedConnection)
+    : null;
 }
 
-async function saveConnection(connection) {
-  await redisCommand(["SET", CONNECTION_KEY, JSON.stringify(connection)]);
+async function saveConnection(
+  connection,
+  captureIdentity
+) {
+  captureIdentity.connection = connection;
+
+  await redisCommand([
+    "SET",
+    captureIdentity.connectionKey,
+    JSON.stringify(connection),
+  ]);
 }
 
 async function refreshMicrosoftAccessToken(refreshToken) {
