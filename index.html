@@ -19,7 +19,7 @@
 
   <link rel="manifest" href="manifest.json" />
   <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-  <link rel="stylesheet" href="styles.css?v=8" />
+  <link rel="stylesheet" href="styles.css?v=9" />
 </head>
 
 <body>
@@ -50,6 +50,33 @@
             Capture it now. Organize it later.
           </p>
         </div>
+
+        <section
+          id="betaSetupBanner"
+          class="beta-setup-banner hidden"
+          aria-labelledby="betaSetupBannerHeading"
+        >
+          <p class="section-label">FRIEND BETA SETUP</p>
+          <h2 id="betaSetupBannerHeading">Finish voice setup</h2>
+          <p id="betaSetupBannerMessage">
+            Complete the checklist once, then capture tasks without opening the app.
+          </p>
+
+          <div class="setup-progress" aria-label="Setup progress">
+            <div class="setup-progress-track">
+              <span id="betaBannerProgressBar" class="setup-progress-bar"></span>
+            </div>
+            <strong id="betaBannerProgressText">0 of 4 complete</strong>
+          </div>
+
+          <button id="openBetaSetupButton" class="primary-button" type="button">
+            Open Setup Checklist
+          </button>
+
+          <a class="text-link" href="/beta-tester-guide.html" target="_blank" rel="noopener noreferrer">
+            Open the Beta Tester Guide
+          </a>
+        </section>
 
         <form id="captureForm" class="capture-card">
           <label for="taskInput">Task, idea, reminder, or note</label>
@@ -184,6 +211,72 @@
           </div>
         </div>
 
+        <section id="betaSetupChecklist" class="beta-setup-card" aria-labelledby="betaSetupHeading">
+          <div class="beta-setup-heading">
+            <div>
+              <p class="section-label">FIRST-TIME SETUP</p>
+              <h3 id="betaSetupHeading">Friend beta checklist</h3>
+            </div>
+            <span id="betaSetupBadge" class="connection-badge">Not ready</span>
+          </div>
+
+          <p class="beta-setup-intro">
+            Complete these four steps on the iPhone that will use GSD Capture.
+          </p>
+
+          <div class="setup-progress" aria-label="Setup progress">
+            <div class="setup-progress-track">
+              <span id="betaSetupProgressBar" class="setup-progress-bar"></span>
+            </div>
+            <strong id="betaSetupProgressText">0 of 4 complete</strong>
+          </div>
+
+          <ol class="setup-checklist">
+            <li id="appInstallSetupItem">
+              <span class="setup-step-number">1</span>
+              <div>
+                <strong>Add GSD Capture to the Home Screen</strong>
+                <small id="appInstallSetupStatus">Open the site in Safari, tap Share, then Add to Home Screen.</small>
+              </div>
+            </li>
+            <li id="microsoftSetupItem">
+              <span class="setup-step-number">2</span>
+              <div>
+                <strong>Connect Microsoft To Do</strong>
+                <small id="microsoftSetupStatus">Sign in with the Microsoft account that should receive the tasks.</small>
+              </div>
+            </li>
+            <li id="voiceSetupItem">
+              <span class="setup-step-number">3</span>
+              <div>
+                <strong>Set up private Voice Capture</strong>
+                <small id="voiceSetupChecklistStatus">Create the private key used by the Shortcut.</small>
+              </div>
+            </li>
+            <li id="shortcutSetupItem">
+              <span class="setup-step-number">4</span>
+              <div>
+                <strong>Install and test the Capture Shortcut</strong>
+                <small id="shortcutSetupChecklistStatus">Copy the key, install the Shortcut, and run one test capture.</small>
+              </div>
+            </li>
+          </ol>
+
+          <div class="beta-setup-actions">
+            <a class="secondary-button button-link" href="/beta-tester-guide.html" target="_blank" rel="noopener noreferrer">
+              Open Beta Tester Guide
+            </a>
+            <a class="small-action-button button-link" href="/beta-tester-guide.pdf" target="_blank" rel="noopener noreferrer">
+              Open Printable PDF
+            </a>
+            <button id="resetShortcutProgressButton" class="small-action-button hidden" type="button">
+              Mark Shortcut as Not Installed
+            </button>
+          </div>
+
+          <p id="betaSetupMessage" class="microsoft-list-message" aria-live="polite"></p>
+        </section>
+
         <div class="settings-card">
           <label for="userName">Your name</label>
           <input
@@ -251,6 +344,8 @@
               </button>
 
               <div id="voiceSetupResult" class="voice-setup-result hidden">
+                <p class="voice-setup-step"><strong>1.</strong> Copy your private Voice Capture key.</p>
+
                 <label for="voiceSetupKey">Your private Voice Capture key</label>
 
                 <input
@@ -266,23 +361,54 @@
                   class="secondary-button"
                   type="button"
                 >
-                  Copy Voice Key
+                  1. Copy Voice Key
                 </button>
+
+                <p class="voice-setup-step"><strong>2.</strong> Install the shared Shortcut and paste the key when asked.</p>
 
                 <a
                   id="installCaptureShortcutButton"
-                  class="secondary-button"
-                  href="https://www.icloud.com/shortcuts/4d74df7d0f824142a243a42a02348f2e"
+                  class="secondary-button button-link"
+                  href="https://www.icloud.com/shortcuts/2767fb23349946cb91c3c0170525ec59"
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  Install Capture Shortcut
+                  2. Install Capture Shortcut
                 </a>
 
+                <button
+                  id="markShortcutInstalledButton"
+                  class="secondary-button"
+                  type="button"
+                >
+                  3. I Installed and Tested the Shortcut
+                </button>
+
+                <p id="shortcutSetupStatus" class="microsoft-list-message" aria-live="polite">
+                  Run a test capture before marking this step complete.
+                </p>
+
                 <p class="voice-key-warning">
-                  Keep this key private. It allows your Shortcut to add tasks, calendar events, and reminders to your Microsoft account.
+                  Keep this key private. It allows your Shortcut to add tasks, calendar events, and reminders to your Microsoft account. Never send the key in a screenshot or message.
                 </p>
               </div>
+
+              <details class="recovery-panel">
+                <summary>Setup help and recovery</summary>
+                <div class="recovery-panel-body">
+                  <p><strong>Invalid key:</strong> Copy the key again and replace the x-gsd-capture-key value in the Shortcut.</p>
+                  <p><strong>Microsoft disconnected:</strong> Reconnect Microsoft To Do, then choose Set Up Again.</p>
+                  <p><strong>Calendar missing:</strong> Enable the same Microsoft calendar in the iPhone Calendar app.</p>
+
+                  <button id="copySupportDetailsButton" class="small-action-button" type="button">
+                    Copy Safe Support Details
+                  </button>
+                  <button id="resetVoiceSetupDeviceButton" class="small-action-button delete-button" type="button">
+                    Clear Voice Setup on This Device
+                  </button>
+                  <p id="supportDetailsStatus" class="microsoft-list-message" aria-live="polite"></p>
+                </div>
+              </details>
             </section>
 
             <div id="microsoftListPanel" class="microsoft-list-panel hidden">
@@ -412,6 +538,6 @@
   </div>
 
   <script src="vendor/msal-browser.min.js?v=1"></script>
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

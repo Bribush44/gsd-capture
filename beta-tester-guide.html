@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#172033" />
+  <title>GSD Capture Beta Tester Guide</title>
+  <style>
+    :root {
+      --bg: #f4f6fb;
+      --card: #ffffff;
+      --text: #172033;
+      --muted: #667085;
+      --primary: #3659e3;
+      --border: #dce2ec;
+      --success: #137a52;
+      --warning: #a15c00;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      line-height: 1.5;
+    }
+    main { width: min(100%, 760px); margin: 0 auto; padding: 22px 18px 64px; }
+    .hero, section {
+      margin-bottom: 16px;
+      padding: 20px;
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      background: var(--card);
+      box-shadow: 0 10px 28px rgba(23,32,51,.07);
+    }
+    .hero {
+      color: white;
+      background: linear-gradient(145deg, #3659e3, #2945b8);
+      border: 0;
+    }
+    .eyebrow { margin: 0; font-size: .72rem; font-weight: 900; letter-spacing: .12em; opacity: .78; }
+    h1 { margin: 6px 0 8px; font-size: 1.8rem; }
+    h2 { margin: 0 0 10px; font-size: 1.25rem; }
+    h3 { margin: 18px 0 6px; font-size: 1rem; }
+    p { margin: 0 0 10px; }
+    ol, ul { margin: 8px 0 0; padding-left: 22px; }
+    li { margin: 8px 0; }
+    .step {
+      display: grid;
+      grid-template-columns: 34px 1fr;
+      gap: 10px;
+      margin: 10px 0;
+      padding: 12px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+    }
+    .number {
+      display: inline-flex;
+      width: 30px;
+      height: 30px;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: rgba(54,89,227,.12);
+      color: var(--primary);
+      font-weight: 900;
+    }
+    .callout {
+      padding: 12px;
+      border-left: 4px solid var(--primary);
+      border-radius: 8px;
+      background: rgba(54,89,227,.07);
+    }
+    .warning { border-left-color: var(--warning); background: rgba(161,92,0,.07); }
+    .success { border-left-color: var(--success); background: rgba(19,122,82,.07); }
+    code {
+      display: block;
+      margin: 8px 0;
+      padding: 10px 12px;
+      border-radius: 10px;
+      background: #eef2f8;
+      white-space: normal;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: .86rem;
+    }
+    a.button {
+      display: inline-flex;
+      min-height: 48px;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      margin-top: 8px;
+      padding: 0 16px;
+      border-radius: 14px;
+      background: var(--primary);
+      color: white;
+      font-weight: 900;
+      text-decoration: none;
+    }
+    small, .muted { color: var(--muted); }
+    table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+    th, td { padding: 9px 8px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; font-size: .86rem; }
+    th { color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .06em; }
+    @media print {
+      body { background: white; }
+      main { width: 100%; padding: 0; }
+      .hero, section { box-shadow: none; break-inside: avoid; }
+      a.button { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="hero">
+      <p class="eyebrow">FRIEND BETA</p>
+      <h1>GSD Capture Tester Guide</h1>
+      <p>Set it up once, then capture tasks, reminders, and calendar events by voice.</p>
+    </div>
+
+    <section>
+      <h2>What you need</h2>
+      <ul>
+        <li>An iPhone with Apple Shortcuts.</li>
+        <li>A personal or work Microsoft account with Microsoft To Do and Calendar access.</li>
+        <li>An internet connection during setup and voice capture.</li>
+      </ul>
+      <div class="callout warning">
+        <strong>Keep your Voice Capture key private.</strong>
+        Do not send it in a screenshot, text message, or feedback report.
+      </div>
+    </section>
+
+    <section>
+      <h2>First-time setup</h2>
+
+      <div class="step"><span class="number">1</span><div><strong>Open GSD Capture in Safari</strong><br><span class="muted">Go to https://gsd-capture.vercel.app</span></div></div>
+      <div class="step"><span class="number">2</span><div><strong>Add it to the Home Screen</strong><br><span class="muted">Tap Share, choose Add to Home Screen, then tap Add.</span></div></div>
+      <div class="step"><span class="number">3</span><div><strong>Connect Microsoft To Do</strong><br><span class="muted">Open Settings in GSD Capture, tap Connect Microsoft To Do, sign in, and accept the requested permissions.</span></div></div>
+      <div class="step"><span class="number">4</span><div><strong>Set up Voice Capture</strong><br><span class="muted">Tap Set Up Voice Capture and complete the Microsoft approval.</span></div></div>
+      <div class="step"><span class="number">5</span><div><strong>Copy your private key</strong><br><span class="muted">Tap Copy Voice Key. The key belongs only to your setup.</span></div></div>
+      <div class="step"><span class="number">6</span><div><strong>Install the shared Shortcut</strong><br><span class="muted">Tap Install Capture Shortcut and paste the key when the Shortcut asks for it. During beta, the shared Shortcut may initially display as “GSD Voice Capture”; it can be renamed to “Capture.”</span></div></div>
+      <div class="step"><span class="number">7</span><div><strong>Run one test</strong><br><span class="muted">Say: “Get a quote from the packaging supplier.” Then check GSD Review and Microsoft To Do.</span></div></div>
+
+      <a class="button" href="https://gsd-capture.vercel.app">Open GSD Capture</a>
+      <p class="muted" style="margin-top:10px"><a href="/beta-tester-guide.pdf">Open the printable PDF version</a></p>
+    </section>
+
+    <section>
+      <h2>Four beta tests</h2>
+      <table>
+        <thead><tr><th>Say this</th><th>Expected result</th></tr></thead>
+        <tbody>
+          <tr><td>“Capture buy printer paper.”</td><td>A task appears in GSD Review and Microsoft To Do.</td></tr>
+          <tr><td>“Get a quote from the packaging supplier.”</td><td>GSD suggests Purchasing, shows confidence and an explanation, and waits for approval.</td></tr>
+          <tr><td>“Remind me tomorrow at 8 AM to call the supplier.”</td><td>The task has a Microsoft To Do reminder for the requested time.</td></tr>
+          <tr><td>“Add a dentist appointment Friday at 2 PM for one hour to my calendar.”</td><td>A Microsoft calendar event is created and appears in Apple Calendar when that Microsoft calendar is enabled on the iPhone.</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Reviewing a capture</h2>
+      <ol>
+        <li>Open GSD Capture and choose Review.</li>
+        <li>Tap Refresh if the new capture is not visible yet.</li>
+        <li>Read the suggested folder, confidence, and explanation.</li>
+        <li>Approve the suggested folder, choose another folder, or keep it in GSD Review.</li>
+        <li>Confirm the task moved to the correct Microsoft To Do list.</li>
+      </ol>
+    </section>
+
+    <section>
+      <h2>Troubleshooting</h2>
+      <h3>The Shortcut says the key is invalid</h3>
+      <p>Open GSD Capture Settings, copy the Voice Key again, and replace the <strong>x-gsd-capture-key</strong> value inside the Shortcut.</p>
+
+      <h3>The task is in Microsoft To Do but not GSD Review</h3>
+      <p>Confirm Voice Capture shows Connected in the same GSD app. Then open Review and tap Refresh.</p>
+
+      <h3>Microsoft is disconnected</h3>
+      <p>Reconnect Microsoft To Do, then choose Set Up Again under Voice Capture and update the Shortcut with the new key.</p>
+
+      <h3>The calendar event is not in Apple Calendar</h3>
+      <p>Open iPhone Settings, go to Apps &gt; Calendar &gt; Calendar Accounts, select the same Microsoft account, and enable Calendars.</p>
+
+      <h3>Still stuck</h3>
+      <p>Open Setup help and recovery in GSD Settings and tap Copy Safe Support Details. Send those details with a screenshot that does not show the Voice Key.</p>
+    </section>
+
+    <section>
+      <h2>Feedback to send Brian</h2>
+      <code>What I said:</code>
+      <code>What I expected:</code>
+      <code>What happened:</code>
+      <code>Did it appear in GSD Review? Yes / No</code>
+      <code>Did it appear in Microsoft To Do or Calendar? Yes / No</code>
+      <code>Screenshot attached: Yes / No (Voice Key hidden)</code>
+    </section>
+
+    <section>
+      <h2>Current beta limitations</h2>
+      <ul>
+        <li>Voice capture requires an internet connection.</li>
+        <li>Calendar events are created in Microsoft Calendar and sync to Apple Calendar when that account is enabled.</li>
+        <li>Recurring schedules and complex repeating reminders are not yet the focus of this beta.</li>
+        <li>The typed task box is available, but this beta is primarily testing the iPhone voice Shortcut.</li>
+      </ul>
+    </section>
+  </main>
+</body>
+</html>
