@@ -1,6 +1,6 @@
 "use strict";
 
-const CACHE_NAME = "gsd-capture-v13";
+const CACHE_NAME = "gsd-capture-v14";
 
 const APP_SHELL = [
   "/",
@@ -8,6 +8,8 @@ const APP_SHELL = [
   "/styles.css",
   "/app.js",
   "/manifest.json",
+  "/beta-tester-guide.html",
+  "/beta-tester-guide.pdf",
   "/vendor/msal-browser.min.js"
 ];
 

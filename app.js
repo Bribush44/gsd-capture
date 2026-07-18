@@ -20,6 +20,9 @@ document.addEventListener("DOMContentLoaded", async function () {
     "gsdVoiceSetupPending";
   const VOICE_SETUP_CONNECTION_KEY =
     "gsdVoiceSetupConnection";
+  const BETA_SHORTCUT_INSTALLED_KEY =
+    "gsdBetaShortcutInstalled";
+  const BETA_APP_VERSION = "Friend Beta 0.9.0";
 
   const captureForm = document.getElementById("captureForm");
   const taskInput = document.getElementById("taskInput");
@@ -117,6 +120,79 @@ document.addEventListener("DOMContentLoaded", async function () {
   const copyVoiceSetupKeyButton = document.getElementById(
     "copyVoiceSetupKeyButton"
   );
+  const markShortcutInstalledButton = document.getElementById(
+    "markShortcutInstalledButton"
+  );
+  const shortcutSetupStatus = document.getElementById(
+    "shortcutSetupStatus"
+  );
+  const resetVoiceSetupDeviceButton = document.getElementById(
+    "resetVoiceSetupDeviceButton"
+  );
+  const copySupportDetailsButton = document.getElementById(
+    "copySupportDetailsButton"
+  );
+  const supportDetailsStatus = document.getElementById(
+    "supportDetailsStatus"
+  );
+  const installCaptureShortcutButton = document.getElementById(
+    "installCaptureShortcutButton"
+  );
+
+  const betaSetupBanner = document.getElementById(
+    "betaSetupBanner"
+  );
+  const betaSetupBannerMessage = document.getElementById(
+    "betaSetupBannerMessage"
+  );
+  const betaBannerProgressBar = document.getElementById(
+    "betaBannerProgressBar"
+  );
+  const betaBannerProgressText = document.getElementById(
+    "betaBannerProgressText"
+  );
+  const openBetaSetupButton = document.getElementById(
+    "openBetaSetupButton"
+  );
+  const betaSetupBadge = document.getElementById(
+    "betaSetupBadge"
+  );
+  const betaSetupProgressBar = document.getElementById(
+    "betaSetupProgressBar"
+  );
+  const betaSetupProgressText = document.getElementById(
+    "betaSetupProgressText"
+  );
+  const betaSetupMessage = document.getElementById(
+    "betaSetupMessage"
+  );
+  const resetShortcutProgressButton = document.getElementById(
+    "resetShortcutProgressButton"
+  );
+  const appInstallSetupItem = document.getElementById(
+    "appInstallSetupItem"
+  );
+  const appInstallSetupStatus = document.getElementById(
+    "appInstallSetupStatus"
+  );
+  const microsoftSetupItem = document.getElementById(
+    "microsoftSetupItem"
+  );
+  const microsoftSetupStatus = document.getElementById(
+    "microsoftSetupStatus"
+  );
+  const voiceSetupItem = document.getElementById(
+    "voiceSetupItem"
+  );
+  const voiceSetupChecklistStatus = document.getElementById(
+    "voiceSetupChecklistStatus"
+  );
+  const shortcutSetupItem = document.getElementById(
+    "shortcutSetupItem"
+  );
+  const shortcutSetupChecklistStatus = document.getElementById(
+    "shortcutSetupChecklistStatus"
+  );
 
   const voiceButton = document.getElementById("voiceButton");
   const captureButton = captureForm
@@ -154,6 +230,7 @@ document.addEventListener("DOMContentLoaded", async function () {
   renderEverything();
   await initializeMicrosoftSignIn();
   await resumeVoiceSetup();
+  updateBetaSetupDisplay();
   await loadServerReviewInbox();
   await processPendingMicrosoftActions();
 
@@ -250,6 +327,52 @@ document.addEventListener("DOMContentLoaded", async function () {
       );
     }
 
+    if (openBetaSetupButton) {
+      openBetaSetupButton.addEventListener(
+        "click",
+        openBetaSetupChecklist
+      );
+    }
+
+    if (markShortcutInstalledButton) {
+      markShortcutInstalledButton.addEventListener(
+        "click",
+        markShortcutInstalled
+      );
+    }
+
+    if (resetShortcutProgressButton) {
+      resetShortcutProgressButton.addEventListener(
+        "click",
+        resetShortcutProgress
+      );
+    }
+
+    if (resetVoiceSetupDeviceButton) {
+      resetVoiceSetupDeviceButton.addEventListener(
+        "click",
+        resetVoiceSetupOnDevice
+      );
+    }
+
+    if (copySupportDetailsButton) {
+      copySupportDetailsButton.addEventListener(
+        "click",
+        copySafeSupportDetails
+      );
+    }
+
+    if (installCaptureShortcutButton) {
+      installCaptureShortcutButton.addEventListener(
+        "click",
+        function () {
+          setBetaSetupMessage(
+            "After installing, run one test capture and return here to mark the Shortcut complete."
+          );
+        }
+      );
+    }
+
     if (refreshReviewButton) {
       refreshReviewButton.addEventListener(
         "click",
@@ -260,8 +383,19 @@ document.addEventListener("DOMContentLoaded", async function () {
     }
 
     window.addEventListener("online", function () {
+      updateBetaSetupDisplay();
       loadServerReviewInbox();
       processPendingMicrosoftActions();
+    });
+
+    window.addEventListener("pageshow", function () {
+      updateBetaSetupDisplay();
+    });
+
+    document.addEventListener("visibilitychange", function () {
+      if (!document.hidden) {
+        updateBetaSetupDisplay();
+      }
     });
   }
 
@@ -559,6 +693,7 @@ document.addEventListener("DOMContentLoaded", async function () {
         voiceSetupKey.value = savedSetup.voiceKey;
       }
 
+      updateBetaSetupDisplay();
       return;
     }
 
@@ -592,6 +727,8 @@ document.addEventListener("DOMContentLoaded", async function () {
           ? "Connect private background capture for Siri and Apple Shortcuts."
           : "Connect Microsoft To Do first, then set up private background capture.";
     }
+
+    updateBetaSetupDisplay();
   }
 
   function setVoiceSetupMessage(message, isError) {
@@ -960,6 +1097,307 @@ document.addEventListener("DOMContentLoaded", async function () {
         "The key is selected. Choose Copy on your device.",
         true
       );
+    }
+  }
+
+  function isRunningAsInstalledApp() {
+    return Boolean(
+      window.matchMedia &&
+        window.matchMedia("(display-mode: standalone)").matches
+    ) || Boolean(window.navigator.standalone);
+  }
+
+  function isShortcutMarkedInstalled() {
+    return localStorage.getItem(
+      BETA_SHORTCUT_INSTALLED_KEY
+    ) === "true";
+  }
+
+  function setBetaSetupMessage(message, isError) {
+    if (!betaSetupMessage) {
+      return;
+    }
+
+    betaSetupMessage.textContent = message || "";
+    betaSetupMessage.classList.toggle(
+      "error-message",
+      Boolean(isError)
+    );
+  }
+
+  function openBetaSetupChecklist() {
+    showScreen("settingsScreen");
+
+    navButtons.forEach(function (button) {
+      button.classList.remove("active-nav");
+    });
+
+    window.setTimeout(function () {
+      const checklist = document.getElementById(
+        "betaSetupChecklist"
+      );
+
+      if (checklist) {
+        checklist.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      }
+    }, 50);
+  }
+
+  function updateSetupChecklistItem(
+    item,
+    statusElement,
+    complete,
+    completeText,
+    incompleteText
+  ) {
+    if (item) {
+      item.classList.toggle(
+        "setup-complete",
+        Boolean(complete)
+      );
+    }
+
+    if (statusElement) {
+      statusElement.textContent = complete
+        ? completeText
+        : incompleteText;
+    }
+  }
+
+  function updateBetaSetupDisplay() {
+    const installedApp = isRunningAsInstalledApp();
+    const microsoftConnected = Boolean(microsoftAccount);
+    const savedSetup = loadSavedVoiceSetup();
+    const voiceConnected = Boolean(
+      savedSetup && savedSetup.voiceKey
+    );
+    const shortcutInstalled = isShortcutMarkedInstalled();
+
+    const completedCount = [
+      installedApp,
+      microsoftConnected,
+      voiceConnected,
+      shortcutInstalled,
+    ].filter(Boolean).length;
+
+    const progressPercent = completedCount * 25;
+    const progressText =
+      completedCount + " of 4 complete";
+    const allComplete = completedCount === 4;
+
+    if (betaSetupBanner) {
+      betaSetupBanner.classList.toggle(
+        "hidden",
+        allComplete
+      );
+    }
+
+    if (betaSetupBannerMessage) {
+      if (!installedApp) {
+        betaSetupBannerMessage.textContent =
+          "Add GSD Capture to the iPhone Home Screen, then finish the connection steps.";
+      } else if (!microsoftConnected) {
+        betaSetupBannerMessage.textContent =
+          "Connect the Microsoft account that should receive tasks and calendar events.";
+      } else if (!voiceConnected) {
+        betaSetupBannerMessage.textContent =
+          "Set up private Voice Capture to create this device's secure Shortcut key.";
+      } else {
+        betaSetupBannerMessage.textContent =
+          "Install the Capture Shortcut, run one test, and mark setup complete.";
+      }
+    }
+
+    [
+      [betaBannerProgressBar, progressPercent],
+      [betaSetupProgressBar, progressPercent],
+    ].forEach(function (entry) {
+      if (entry[0]) {
+        entry[0].style.width = entry[1] + "%";
+      }
+    });
+
+    if (betaBannerProgressText) {
+      betaBannerProgressText.textContent = progressText;
+    }
+
+    if (betaSetupProgressText) {
+      betaSetupProgressText.textContent = progressText;
+    }
+
+    if (betaSetupBadge) {
+      betaSetupBadge.textContent = allComplete
+        ? "Ready to test"
+        : "Setup needed";
+      betaSetupBadge.classList.toggle(
+        "connected",
+        allComplete
+      );
+    }
+
+    updateSetupChecklistItem(
+      appInstallSetupItem,
+      appInstallSetupStatus,
+      installedApp,
+      "GSD Capture is running from the Home Screen.",
+      "Open the site in Safari, tap Share, then Add to Home Screen."
+    );
+
+    updateSetupChecklistItem(
+      microsoftSetupItem,
+      microsoftSetupStatus,
+      microsoftConnected,
+      "Microsoft To Do is connected on this device.",
+      "Sign in with the Microsoft account that should receive tasks."
+    );
+
+    updateSetupChecklistItem(
+      voiceSetupItem,
+      voiceSetupChecklistStatus,
+      voiceConnected,
+      "The private Voice Capture key is saved on this device.",
+      microsoftConnected
+        ? "Choose Set Up Voice Capture below."
+        : "Connect Microsoft To Do first."
+    );
+
+    updateSetupChecklistItem(
+      shortcutSetupItem,
+      shortcutSetupChecklistStatus,
+      shortcutInstalled,
+      "The Shortcut was marked installed and tested.",
+      voiceConnected
+        ? "Copy the key, install the Shortcut, and run one test capture."
+        : "Finish Voice Capture setup first."
+    );
+
+    if (markShortcutInstalledButton) {
+      markShortcutInstalledButton.disabled =
+        !voiceConnected || shortcutInstalled;
+      markShortcutInstalledButton.textContent =
+        shortcutInstalled
+          ? "Shortcut Installed and Tested"
+          : "3. I Installed and Tested the Shortcut";
+    }
+
+    if (shortcutSetupStatus) {
+      shortcutSetupStatus.textContent = shortcutInstalled
+        ? "Setup complete. New voice captures should appear in GSD Review and Microsoft To Do."
+        : "Run a test capture before marking this step complete.";
+      shortcutSetupStatus.classList.toggle(
+        "success-message",
+        shortcutInstalled
+      );
+    }
+
+    if (resetShortcutProgressButton) {
+      resetShortcutProgressButton.classList.toggle(
+        "hidden",
+        !shortcutInstalled
+      );
+    }
+  }
+
+  function markShortcutInstalled() {
+    const savedSetup = loadSavedVoiceSetup();
+
+    if (!savedSetup || !savedSetup.voiceKey) {
+      setBetaSetupMessage(
+        "Finish Voice Capture setup before marking the Shortcut complete.",
+        true
+      );
+      return;
+    }
+
+    localStorage.setItem(
+      BETA_SHORTCUT_INSTALLED_KEY,
+      "true"
+    );
+
+    setBetaSetupMessage(
+      "Shortcut setup marked complete. Run another voice capture any time to keep testing."
+    );
+    updateBetaSetupDisplay();
+  }
+
+  function resetShortcutProgress() {
+    localStorage.removeItem(
+      BETA_SHORTCUT_INSTALLED_KEY
+    );
+
+    setBetaSetupMessage(
+      "Shortcut step reset. Install or retest the Shortcut, then mark it complete again."
+    );
+    updateBetaSetupDisplay();
+  }
+
+  function resetVoiceSetupOnDevice() {
+    const confirmed = window.confirm(
+      "Clear the saved Voice Capture key from this device? The existing Shortcut may keep working until you replace its key, but the app will not load voice Review items until setup is completed again."
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    localStorage.removeItem(
+      VOICE_SETUP_CONNECTION_KEY
+    );
+    localStorage.removeItem(
+      BETA_SHORTCUT_INSTALLED_KEY
+    );
+    sessionStorage.removeItem(
+      VOICE_SETUP_PENDING_KEY
+    );
+
+    updateVoiceSetupDisplay();
+    updateBetaSetupDisplay();
+    setVoiceSetupMessage(
+      "Voice setup was cleared from this device. Choose Set Up Voice Capture to begin again."
+    );
+    setServerReviewStatus(
+      "Set up Voice Capture to load spoken captures here."
+    );
+  }
+
+  async function copySafeSupportDetails() {
+    const details = [
+      "GSD Capture support details",
+      "Version: " + BETA_APP_VERSION,
+      "Installed app: " +
+        (isRunningAsInstalledApp() ? "Yes" : "No"),
+      "Microsoft connected: " +
+        (microsoftAccount ? "Yes" : "No"),
+      "Voice Capture connected: " +
+        (loadSavedVoiceSetup() ? "Yes" : "No"),
+      "Shortcut marked installed: " +
+        (isShortcutMarkedInstalled() ? "Yes" : "No"),
+      "Online: " + (navigator.onLine ? "Yes" : "No"),
+      "Page: " + window.location.origin,
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(details);
+
+      if (supportDetailsStatus) {
+        supportDetailsStatus.textContent =
+          "Safe support details copied. They do not include your Voice Key.";
+        supportDetailsStatus.classList.remove(
+          "error-message"
+        );
+      }
+    } catch (error) {
+      if (supportDetailsStatus) {
+        supportDetailsStatus.textContent =
+          details +
+          " - Copy this text manually. It does not include your Voice Key.";
+        supportDetailsStatus.classList.add(
+          "error-message"
+        );
+      }
     }
   }
 

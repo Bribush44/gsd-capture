@@ -1,7 +1,7 @@
 {
   "name": "GSD Capture",
   "short_name": "GSD Capture",
-  "description": "A fast, phone-first GTD task and idea capture app.",
+  "description": "A phone-first voice capture assistant for Microsoft To Do, reminders, calendars, and AI review.",
   "id": "/",
   "start_url": "/",
   "scope": "/",
